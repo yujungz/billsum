@@ -1,0 +1,26 @@
+services:
+  billsum-app:
+    build:
+      context: .
+      dockerfile: deploy.Dockerfile
+    container_name: billsum-app
+    ports:
+      - "8089:80"
+    volumes:
+      - app_data:/app/data
+      - /e/work/(03)burncloud/ssh:/ssh_keys:ro
+    networks:
+      - billsum_net
+    environment:
+      - MYSQL_HOST=${MYSQL_HOST:-test-mysql8}
+      - MYSQL_PORT=${MYSQL_PORT:-3306}
+      - MYSQL_USER=${MYSQL_USER:-root}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-123456}
+    restart: unless-stopped
+
+volumes:
+  app_data:
+
+networks:
+  billsum_net:
+    external: true
