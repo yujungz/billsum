@@ -204,6 +204,9 @@ const activeFilters = computed(() => {
 
 const filterValues = reactive({})
 
+// columns cache: { "site:table": columns[] }
+const _columnsCache = reactive({})
+
 // reset filter values when table changes
 watch(selectedTable, () => {
   Object.keys(filterValues).forEach(k => delete filterValues[k])
@@ -266,14 +269,35 @@ function doQuery() {
   loadData()
 }
 
+async function loadColumns() {
+  if (!selectedTable.value) return
+  const cacheKey = `${site.value}:${selectedTable.value}`
+  if (_columnsCache[cacheKey]) {
+    columns.value = _columnsCache[cacheKey]
+    return
+  }
+  const { data } = await api.query.columns(site.value, selectedTable.value)
+  const cols = data.columns || []
+  _columnsCache[cacheKey] = cols
+  columns.value = cols
+}
+
 async function loadData() {
   if (!selectedTable.value) return
   loading.value = true
   try {
     const to = isLogsTable.value ? timeOrder.value : null
+    // columns: use cache if available, otherwise fetch in parallel
+    const cacheKey = `${site.value}:${selectedTable.value}`
+    const colsPromise = _columnsCache[cacheKey]
+      ? Promise.resolve({ data: { columns: _columnsCache[cacheKey] } })
+      : api.query.columns(site.value, selectedTable.value).then(res => {
+          _columnsCache[cacheKey] = res.data.columns || []
+          return res
+        })
     const [dataRes, colRes] = await Promise.all([
       api.query.data(site.value, selectedTable.value, page.value, pageSize.value, buildFilters(), to),
-      api.query.columns(site.value, selectedTable.value),
+      colsPromise,
     ])
     tableData.value = dataRes.data.data || []
     total.value = dataRes.data.total || 0

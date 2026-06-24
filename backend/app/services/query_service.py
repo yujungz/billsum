@@ -15,6 +15,9 @@ LIKE_FIELDS = {
 BASE_TABLES = ["channels", "users", "tokens"]
 EX_TABLES = ["ex_channels", "ex_users", "ex_tokens"]
 
+# Column metadata cache: { "db.table": columns_list }
+_columns_cache: dict[str, list[dict]] = {}
+
 
 async def list_raw_tables(site: str) -> list[dict]:
     """List raw/original tables for a site."""
@@ -123,21 +126,38 @@ async def query_table(site: str, table_name: str, page: int = 1,
 
 
 async def get_table_columns(site: str, table_name: str) -> list[dict]:
-    """Get column info for a table."""
+    """Get column info for a table, with in-memory cache."""
     config = AppConfig.load()
     db_name = config.db_name(site)
-    return await db.fetch_all(
+    cache_key = f"{db_name}.{table_name}"
+
+    cached = _columns_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    columns = await db.fetch_all(
         "SELECT COLUMN_NAME as name, DATA_TYPE as type, COLUMN_COMMENT as comment "
         "FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s "
         "ORDER BY ORDINAL_POSITION",
         (db_name, table_name),
     )
+    _columns_cache[cache_key] = columns
+    return columns
+
+
+def clear_columns_cache(db_name: str = "", table_name: str = ""):
+    """Clear column cache. If both args given, clear specific entry; otherwise clear all."""
+    if db_name and table_name:
+        _columns_cache.pop(f"{db_name}.{table_name}", None)
+    else:
+        _columns_cache.clear()
 
 
 async def delete_table(site: str, table_name: str):
     config = AppConfig.load()
     db_name = config.db_name(site)
     await db.execute(f"DROP TABLE IF EXISTS `{table_name}`", db=db_name)
+    _columns_cache.pop(f"{db_name}.{table_name}", None)
 
 
 async def export_all_data(site: str, table_name: str, filters: dict | None = None) -> tuple:

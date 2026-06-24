@@ -27,7 +27,8 @@ def sql_old2new(tbn_new: str) -> list[str]:
     IFNULL(CASE WHEN JSON_VALID(l.other) THEN CAST(JSON_UNQUOTE(JSON_EXTRACT(l.other, '$.cache_ratio')) AS DECIMAL(18,6)) else 0 END,0) as cache_ratio,
     IFNULL(CASE WHEN JSON_VALID(l.other) THEN CAST(JSON_UNQUOTE(JSON_EXTRACT(l.other, '$.cache_creation_ratio')) AS DECIMAL(18,6)) else 0 END,0) as cache_creation_ratio,
     IFNULL(CASE WHEN JSON_VALID(l.other) THEN CAST(JSON_UNQUOTE(JSON_EXTRACT(l.other, '$.cache_creation_ratio_5m')) AS DECIMAL(18,6)) else 0 END,0) as cache_creation_ratio_5m,
-    IFNULL(CASE WHEN JSON_VALID(l.other) THEN CAST(JSON_UNQUOTE(JSON_EXTRACT(l.other, '$.user_group_ratio')) AS DECIMAL(18,6)) else 0 END,0) as user_group_ratio
+    IFNULL(CASE WHEN JSON_VALID(l.other) THEN CAST(JSON_UNQUOTE(JSON_EXTRACT(l.other, '$.user_group_ratio')) AS DECIMAL(18,6)) else 0 END,0) as user_group_ratio,
+    IFNULL(CASE WHEN JSON_VALID(l.other) THEN JSON_UNQUOTE(JSON_EXTRACT(l.other, '$.expr_b64')) ELSE NULL END, NULL) as expr_b64
     FROM `{tbn_old}` l""")
 
     stmts.append(f"""ALTER TABLE `{tbn_new}`
@@ -57,7 +58,8 @@ def sql_old2new(tbn_new: str) -> list[str]:
     MODIFY COLUMN cache_ratio decimal(18,6) NULL,
     MODIFY COLUMN cache_creation_ratio decimal(18,6) NULL,
     MODIFY COLUMN cache_creation_ratio_5m decimal(18,6) NULL,
-    MODIFY COLUMN user_group_ratio decimal(18,6) NULL""")
+    MODIFY COLUMN user_group_ratio decimal(18,6) NULL,
+    MODIFY COLUMN expr_b64 text NULL""")
 
     # composite index for sorting
     idx_sort = f"{tbn_new}_idx_sort"
@@ -148,12 +150,23 @@ def sql_remote_export(
     time_end: str,
     backup: int = 1,
 ) -> str:
-    """Generate the remote bash command for exporting data (outdata.sh logic)."""
+    """Generate the remote bash command for exporting data (outdata.sh logic).
+
+    NOTE: Do NOT use pipe (e.g. | sed) — the remote SSH server drops the
+    connection after docker exec + mysql commands, which kills the pipe and
+    loses buffered data.  Write mysqldump output directly to a file, then
+    run sed in-place as a separate step.
+    """
     cmd = f"""docker exec {container_name} mysqldump -uroot -p{password} \
 --single-transaction --set-gtid-purged=OFF {db_name} logs \
 --where="type=2 and created_at+28800 BETWEEN UNIX_TIMESTAMP('{time_begin}') AND UNIX_TIMESTAMP('{time_end}')" \
-| sed 's/`logs`/`{log_name}orig`/g' > ~/data/{site}/{log_name}.sql"""
+> ~/data/{site}/{log_name}.sql"""
     return cmd
+
+
+def sql_remote_sed_rename(site: str, log_name: str) -> str:
+    """In-place sed to rename table `logs` -> `{log_name}orig` in the dump file."""
+    return f"sed -i 's/`logs`/`{log_name}orig`/g' ~/data/{site}/{log_name}.sql"
 
 
 def sql_remote_export_base_tables(

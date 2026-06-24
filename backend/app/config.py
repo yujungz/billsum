@@ -1,5 +1,6 @@
 import json
 import os
+import time
 from pathlib import Path
 from pydantic import BaseModel
 
@@ -92,12 +93,22 @@ class AppConfig(BaseModel):
     sites: dict[str, SiteConfig] = {}
     business: BusinessConfig = BusinessConfig()
 
+    # class-level config cache
+    _cache: "AppConfig | None" = None
+    _cache_mtime: float = 0.0
+
     @classmethod
     def load(cls) -> "AppConfig":
         if CONFIG_FILE.exists():
+            mtime = CONFIG_FILE.stat().st_mtime
+            if cls._cache is not None and mtime == cls._cache_mtime:
+                return cls._cache
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            return cls(**data)
+            cfg = cls(**data)
+            cls._cache = cfg
+            cls._cache_mtime = mtime
+            return cfg
         cfg = cls()
         for site in SITES:
             d = SITE_DEFAULTS.get(site, {})
@@ -113,6 +124,9 @@ class AppConfig(BaseModel):
         CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             json.dump(self.model_dump(), f, ensure_ascii=False, indent=2)
+        # update cache after save
+        AppConfig._cache = self
+        AppConfig._cache_mtime = CONFIG_FILE.stat().st_mtime
 
     def get_site(self, site: str) -> SiteConfig:
         if site not in self.sites:

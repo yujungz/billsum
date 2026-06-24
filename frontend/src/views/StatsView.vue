@@ -154,7 +154,7 @@ const allColumns = [
   { key: 'channel_id', label: '渠道ID', width: 80 },
   { key: 'channel_name', label: '渠道', width: 120 },
   { key: 'model_name', label: '模型', width: 160 },
-  { key: 'token_name', label: 'Token', width: 120 },
+  { key: 'token_name', label: 'Token名称', width: 120 },
   { key: 'group_name', label: '分组', width: 120 },
   { key: 'cn_buyer1', label: '采购员', width: 100 },
   { key: 'cn_supplier1', label: '供应商', width: 100 },

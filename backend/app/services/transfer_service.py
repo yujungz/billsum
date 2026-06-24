@@ -12,7 +12,9 @@ from pathlib import Path
 from app.config import AppConfig
 from app import database as db
 from app.services import ssh_service
-from app.services.sql_templates import sql_old2new, sql_uptnew, sql_remote_export, sql_remote_export_base_tables
+from app.services.sql_templates import sql_old2new, sql_uptnew, sql_remote_export, sql_remote_export_base_tables, sql_remote_sed_rename
+from app.services import expr_parser
+from app.services.query_service import clear_columns_cache
 
 log = logging.getLogger(__name__)
 
@@ -134,6 +136,7 @@ async def export_remote(site: str, period_type: str, ym: str = "",
 
     # export logs if selected
     if "logs" in tables:
+        # Step 1: mysqldump → direct redirect to file (no pipe, so data survives SSH drops)
         export_cmd = sql_remote_export(
             site=site,
             container_name=rdb.container_name,
@@ -145,16 +148,25 @@ async def export_remote(site: str, period_type: str, ym: str = "",
             backup=ssh_cfg.backup,
         )
         exit_code, out, err = ssh_service.exec_remote_command(
-            ssh_cfg, f"set -o pipefail; {export_cmd}", timeout=600
+            ssh_cfg, export_cmd, timeout=600
         )
-        if exit_code != 0:
+        if exit_code > 0:
             return {"success": False, "step": "export", "error": err or out}
-        # verify SQL file is not empty
+        if exit_code == -1:
+            log.warning(f"SSH connection dropped during export for {site} (exit_code=-1), verifying file...")
+
+        # Step 2: verify file exists and is not empty (uses new SSH connection)
         ck_code, ck_out, _ = ssh_service.exec_remote_command(
             ssh_cfg, f"wc -c ~/data/{site}/{log_name}.sql"
         )
-        if ck_code == 0 and int(ck_out.strip().split()[0]) == 0:
+        if ck_code != 0 or int(ck_out.strip().split()[0]) == 0:
             return {"success": False, "step": "export", "error": f"导出文件为空，可能是远程数据库连接失败或表不存在"}
+
+        # Step 3: in-place sed to rename `logs` → `{log_name}orig` (separate SSH connection)
+        sed_cmd = sql_remote_sed_rename(site, log_name)
+        sed_code, _, sed_err = ssh_service.exec_remote_command(ssh_cfg, sed_cmd, timeout=300)
+        if sed_code not in (0, -1):
+            return {"success": False, "step": "export", "error": f"sed rename failed: {sed_err}"}
 
         tar_file = f"{site}_{log_name}.tgz"
         ssh_service.exec_remote_command(
@@ -295,6 +307,8 @@ async def fill_local(site: str, log_name: str) -> dict:
     try:
         # old2new: create processed table from orig (non-index statements)
         stmts = sql_old2new(log_name)
+        # invalidate columns cache since table is being recreated
+        clear_columns_cache(db_name, log_name)
         idx_stmt_indices = []
         for i, stmt in enumerate(stmts):
             if stmt.startswith("CREATE INDEX"):
@@ -323,11 +337,57 @@ async def fill_local(site: str, log_name: str) -> dict:
                     continue
             await db.execute(stmt, db=db_name)
 
+        # fill_expr_pricing: apply expr_b64-based pricing for rows that have it
+        await fill_expr_pricing(site, log_name)
+
     except Exception as e:
         log.error(f"fill_local failed for {site}/{log_name}: {e}")
         return {"success": False, "step": "fill", "error": str(e)}
 
     return {"success": True, "step": "fill", "log_name": log_name}
+
+
+async def fill_expr_pricing(site: str, log_name: str):
+    """Apply expr_b64-based pricing for rows that have a non-empty expr_b64.
+
+    For each distinct expr_b64 value, decode the formula and generate a
+    single UPDATE SQL that sets the price/ratio fields for all matching rows.
+
+    This runs after uptnew so that rows without expr_b64 keep the old logic.
+    """
+    config = AppConfig.load()
+    db_name = config.db_name(site)
+    table = log_name
+
+    # Get distinct non-empty expr_b64 values
+    rows = await db.fetch_all(
+        f"SELECT DISTINCT expr_b64 FROM `{table}` "
+        "WHERE expr_b64 IS NOT NULL AND expr_b64 != ''",
+        db=db_name,
+    )
+    if not rows:
+        return
+
+    for row in rows:
+        b64 = row["expr_b64"]
+        try:
+            formula = expr_parser.parse(b64)
+            sql = expr_parser.generate_update_sql(table, b64, formula)
+            if not sql:
+                continue
+            log.info(
+                "fill_expr_pricing: %s / %s  b64=%.40s…  "
+                "tiered=%s  tiers=%d  currency=%s",
+                site, table, b64,
+                formula.is_tiered, len(formula.tiers), formula.currency,
+            )
+            await db.execute(sql, (b64,), db=db_name)
+            log.info("fill_expr_pricing: updated rows for expr_b64=%.40s…", b64)
+        except Exception as e:
+            log.error(
+                "fill_expr_pricing failed for %s/%s b64=%.40s… : %s",
+                site, table, b64, e,
+            )
 
 
 async def run_all(site: str, period_type: str, ym: str = "",

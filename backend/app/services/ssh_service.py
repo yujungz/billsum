@@ -33,9 +33,13 @@ def exec_remote_command(ssh_cfg: SSHRemoteConfig, command: str, timeout: int = 3
     client = _create_ssh_client(ssh_cfg)
     try:
         stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
-        exit_code = stdout.channel.recv_exit_status()
+        # Read stdout/stderr first — this blocks until the command finishes (EOF),
+        # which also ensures the exit status is available afterwards.
+        # Calling recv_exit_status() before read() can return -1 for long-running
+        # commands that produce stderr output (e.g. mysqldump password warning).
         out = stdout.read().decode("utf-8", errors="replace")
         err = stderr.read().decode("utf-8", errors="replace")
+        exit_code = stdout.channel.recv_exit_status()
         return exit_code, out, err
     finally:
         client.close()
