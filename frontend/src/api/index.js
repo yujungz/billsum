@@ -17,6 +17,16 @@ export default {
     taskStatus: (taskId) => api.get('/transfer/task-status', { params: { task_id: taskId } }),
     uptcustomer: (data) => api.post('/transfer/uptcustomer', data),
   },
+  // 数据传导 (DB→DB backup/transfer)
+  conduction: {
+    getConfig: () => api.get('/conduction/config'),
+    saveConfig: (data) => api.put('/conduction/config', data),
+    testSsh: (data) => api.post('/conduction/test-ssh', data),
+    testDb: (data) => api.post('/conduction/test-db', data),
+    refreshTables: (data) => api.post('/conduction/refresh-tables', data),
+    start: (data) => api.post('/conduction/start', data),
+    taskStatus: (taskId) => api.get('/conduction/task-status', { params: { task_id: taskId } }),
+  },
   // Finance
   finance: {
     logTables: (site) => api.get('/finance/log-tables', { params: { site } }),

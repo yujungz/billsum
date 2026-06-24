@@ -90,6 +90,10 @@
             </el-form-item>
           </el-form>
         </el-tab-pane>
+
+        <el-tab-pane label="数据传导" name="conduction" lazy>
+          <ConductionPanel />
+        </el-tab-pane>
       </el-tabs>
     </el-card>
   </div>
@@ -100,6 +104,7 @@ import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import api from '../api'
+import ConductionPanel from '../components/ConductionPanel.vue'
 
 const STATE_KEY = 'billsum_transfer_state'
 

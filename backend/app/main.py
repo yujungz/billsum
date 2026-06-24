@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import AppConfig
 from app.database import init_pool, close_pool
-from app.api import transfer, query, statistics, settings_api, system, finance
+from app.api import transfer, query, statistics, settings_api, system, finance, conduction
 
 log = logging.getLogger(__name__)
 
@@ -37,6 +37,7 @@ app.include_router(statistics.router)
 app.include_router(settings_api.router)
 app.include_router(system.router)
 app.include_router(finance.router)
+app.include_router(conduction.router)
 
 
 @app.get("/api/health")
