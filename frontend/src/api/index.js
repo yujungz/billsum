@@ -26,6 +26,7 @@ export default {
     refreshTables: (data) => api.post('/conduction/refresh-tables', data),
     start: (data) => api.post('/conduction/start', data),
     taskStatus: (taskId) => api.get('/conduction/task-status', { params: { task_id: taskId } }),
+    download: (taskId) => api.get('/conduction/download', { params: { task_id: taskId }, responseType: 'blob' }),
   },
   // Finance
   finance: {

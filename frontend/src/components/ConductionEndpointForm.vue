@@ -31,7 +31,7 @@
       <el-form-item v-if="endpoint.ssh.auth_method === 'key'" label="RSA 密钥">
         <div style="display:flex; gap:6px; width:100%">
           <el-input v-model="endpoint.ssh.key_path" placeholder="后端主机内密钥路径" />
-          <el-button :loading="mountLoading" @click="triggerMount">挂载</el-button>
+          <el-button type="warning" :icon="Upload" :loading="mountLoading" @click="triggerMount">挂载</el-button>
         </div>
       </el-form-item>
       <el-form-item v-if="endpoint.ssh.auth_method === 'password'" label="密码">
@@ -50,7 +50,8 @@
         <el-input v-model="endpoint.ssh.remote_path" :placeholder="endpoint.os_type === 'windows' ? 'c:\\data' : '~/data/'" />
       </el-form-item>
       <el-form-item>
-        <el-button :loading="sshLoading" @click="testSsh">测试 SSH</el-button>
+        <el-button type="success" :icon="Link" :loading="sshLoading" @click="testSsh">测试 SSH</el-button>
+        <div v-if="sshResult" :class="['result-line', sshResult.ok ? 'ok' : 'err']">{{ sshResult.text }}</div>
       </el-form-item>
     </template>
 
@@ -77,8 +78,9 @@
       </el-form-item>
     </template>
     <el-form-item>
-      <el-button :loading="dbLoading" @click="testDb">测试数据库连接</el-button>
-      <el-button v-if="which === 'source'" :loading="dbLoading" @click="testDb">表名选择…</el-button>
+      <el-button type="success" :icon="Connection" :loading="dbLoading" @click="testDb">测试数据库连接</el-button>
+      <el-button v-if="which === 'source'" type="primary" :icon="Search" :loading="dbLoading" @click="testDb">获取表名</el-button>
+      <div v-if="dbResult" :class="['result-line', dbResult.ok ? 'ok' : 'err']">{{ dbResult.text }}</div>
     </el-form-item>
   </el-form>
 </template>
@@ -86,6 +88,7 @@
 <script setup>
 import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
+import { Connection, Search, Link, Upload } from '@element-plus/icons-vue'
 import api from '../api'
 
 const props = defineProps({
@@ -97,14 +100,22 @@ const emit = defineEmits(['tables'])
 const sshLoading = ref(false)
 const dbLoading = ref(false)
 const mountLoading = ref(false)
+const sshResult = ref(null)
+const dbResult = ref(null)
+
+function now() {
+  const d = new Date()
+  const p = n => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+}
 
 async function testSsh() {
   sshLoading.value = true
   try {
     const { data } = await api.conduction.testSsh(props.endpoint)
-    data.success ? ElMessage.success(data.message) : ElMessage.error(data.message)
+    sshResult.value = { ok: data.success, text: `${now()} ${data.message}` }
   } catch (e) {
-    ElMessage.error('SSH 测试失败: ' + (e.response?.data?.detail || e.message))
+    sshResult.value = { ok: false, text: `${now()} SSH 测试失败: ${e.response?.data?.detail || e.message}` }
   } finally {
     sshLoading.value = false
   }
@@ -114,14 +125,10 @@ async function testDb() {
   dbLoading.value = true
   try {
     const { data } = await api.conduction.testDb(props.endpoint)
-    if (data.success) {
-      ElMessage.success(data.message)
-      if (props.which === 'source') emit('tables', data.tables || [])
-    } else {
-      ElMessage.error(data.message)
-    }
+    dbResult.value = { ok: data.success, text: `${now()} ${data.message}` }
+    if (data.success && props.which === 'source') emit('tables', data.tables || [])
   } catch (e) {
-    ElMessage.error('数据库测试失败: ' + (e.response?.data?.detail || e.message))
+    dbResult.value = { ok: false, text: `${now()} 数据库测试失败: ${e.response?.data?.detail || e.message}` }
   } finally {
     dbLoading.value = false
   }
@@ -157,4 +164,7 @@ function triggerMount() {
 <style scoped>
 .ep-form :deep(.el-form-item) { margin-bottom: 12px; }
 .ep-form :deep(.el-divider) { margin: 8px 0 14px; }
+.result-line { flex-basis: 100%; margin-top: 6px; font-size: 12px; font-family: Consolas, monospace; word-break: break-all; line-height: 1.5; }
+.result-line.ok { color: #67c23a; }
+.result-line.err { color: #f56c6c; }
 </style>

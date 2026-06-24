@@ -69,7 +69,26 @@ def get_task_status(task_id: str) -> dict | None:
     if not t:
         return None
     elapsed = (t["end_time"] or time.time()) - t["start_time"]
-    return {**t, "elapsed": round(elapsed, 1)}
+    tgz_path = t.get("tgz_path")
+    return {
+        "task_id": task_id,
+        "status": t["status"],
+        "logs": t["logs"],
+        "elapsed": round(elapsed, 1),
+        "tgz_name": t.get("tgz_name", ""),
+        "has_tgz": bool(tgz_path and os.path.exists(tgz_path)),
+    }
+
+
+def get_tgz(task_id: str) -> tuple[str, str] | None:
+    """Return (path, filename) of the backup archive if it still exists on disk."""
+    t = _tasks.get(task_id)
+    if not t:
+        return None
+    path = t.get("tgz_path")
+    if path and os.path.exists(path):
+        return path, t.get("tgz_name", "backup.tgz")
+    return None
 
 
 def _append_log(task_id: str, step: str, success: bool, message: str = "") -> None:
@@ -219,7 +238,14 @@ def resolve_remote_path(ep: CondEndpoint, path: str) -> str:
 
 def _remote_join(ep: CondEndpoint, *parts: str) -> str:
     sep = "\\" if ep.os_type == "windows" else "/"
-    return sep.join(p.strip("/\\") for p in parts if p)
+    cleaned = [p for p in parts if p]
+    if not cleaned:
+        return ""
+    # preserve a leading separator (absolute path) from the first part —
+    # stripping it would turn "/root/data" into the relative "root/data",
+    # which then resolves under the SSH home dir and breaks the redirect.
+    leading = sep if cleaned[0].startswith(sep) else ""
+    return leading + sep.join(p.strip("/\\") for p in cleaned)
 
 
 def _sftp_path(path: str) -> str:
@@ -334,6 +360,8 @@ async def run_all(task_id: str, cfg: CondConfig):
     tgz_name = f"{src_db}.tgz"
     local_sql = work / sql_name
     local_tgz = work / tgz_name
+    _tasks[task_id]["tgz_path"] = str(local_tgz)
+    _tasks[task_id]["tgz_name"] = tgz_name
 
     # Step 0: resolve full mode + tables from the SOURCE (re-fetch, don't trust client)
     _append_log(task_id, "准备", True, "获取源库表清单...")

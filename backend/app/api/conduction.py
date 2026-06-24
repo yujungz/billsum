@@ -5,6 +5,7 @@ settings_api.py (connection tests). Does not touch existing modules.
 """
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse
 
 from app.services import conduction_config
 from app.services import conduction_service
@@ -62,3 +63,12 @@ async def task_status(task_id: str):
     if not result:
         raise HTTPException(404, detail="Task not found")
     return result
+
+
+@router.get("/download")
+async def download(task_id: str):
+    res = conduction_service.get_tgz(task_id)
+    if not res:
+        raise HTTPException(404, detail="打包文件不存在或已被清理")
+    path, name = res
+    return FileResponse(path, filename=name, media_type="application/gzip")

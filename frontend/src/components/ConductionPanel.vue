@@ -18,10 +18,12 @@
     <el-divider />
 
     <el-space wrap>
-      <el-button :icon="Files" @click="openTableDialog">表名选择…</el-button>
+      <el-button type="success" :icon="Files" @click="openTableDialog">表名选择…</el-button>
       <el-tag :type="modeTag" effect="plain">{{ modeHint }}</el-tag>
       <el-button type="primary" :loading="saving" @click="saveConfig">保存配置</el-button>
+      <el-button :loading="resetting" @click="resetConfig">重置配置</el-button>
       <el-button type="danger" :disabled="running" :loading="starting" @click="startTransfer">开始传导</el-button>
+      <el-button v-if="taskDone && hasTgz" type="primary" :icon="Download" plain @click="downloadTgz">下载 {{ downloadName }}</el-button>
     </el-space>
 
     <div v-if="timerRunning || elapsed" class="timer-bar">
@@ -51,7 +53,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Files } from '@element-plus/icons-vue'
+import { Files, Download } from '@element-plus/icons-vue'
 import api from '../api'
 import ConductionEndpointForm from './ConductionEndpointForm.vue'
 import ConductionTableSelect from './ConductionTableSelect.vue'
@@ -67,12 +69,12 @@ function defaultEndpoint(over) {
 }
 
 const config = reactive({
-  source: defaultEndpoint({ os_type: 'windows', db: { user: 'root', password: '123456', db_name: 'shadow_manager', container_name: '', host: '', port: 3306 } }),
-  destination: defaultEndpoint({
+  source: defaultEndpoint({
     deploy_type: 'remote', run_mode: 'docker', os_type: 'linux',
-    ssh: { auth_method: 'key', password: '', key_path: '', user: 'root', host: '', port: 22, remote_path: '~/data/' },
-    db: { user: 'root', password: 'burncloud123456qwe', db_name: 'shadow_manager', container_name: '', host: '', port: 3306 },
+    ssh: { auth_method: 'key', password: '', key_path: 'E:\\work\\(03)burncloud\\ssh\\host20260311', user: 'root', host: 'shadowdev.burncloud.cn', port: 22, remote_path: '~/data/' },
+    db: { user: 'root', password: 'burncloud123456qwe', db_name: 'shadow_manager', container_name: 'shadow-manager-dev-mysql', host: 'localhost', port: 3306 },
   }),
+  destination: defaultEndpoint({ os_type: 'windows', db: { user: 'root', password: '123456', db_name: 'shadow_manager', container_name: 'test-mysql8', host: '', port: 3306 } }),
 })
 
 const sourceTables = ref([])
@@ -80,9 +82,13 @@ const tableDialog = ref(false)
 const tablesLoading = ref(false)
 
 const saving = ref(false)
+const resetting = ref(false)
 const starting = ref(false)
 const running = ref(false)
 const taskId = ref(null)
+const hasTgz = ref(false)
+const downloadName = ref('')
+const taskDone = ref(false)
 const logs = ref([])
 const elapsed = ref(0)
 const timerRunning = ref(false)
@@ -143,6 +149,23 @@ async function saveConfig() {
   }
 }
 
+async function resetConfig() {
+  try {
+    await ElMessageBox.confirm('确定放弃当前未保存的修改，恢复到最后保存的配置？', '重置配置',
+      { confirmButtonText: '重置', cancelButtonText: '取消', type: 'warning' })
+  } catch { return }
+  resetting.value = true
+  try {
+    await loadServerConfig()
+    sourceTables.value = []
+    ElMessage.success('已恢复到最后保存的配置')
+  } catch (e) {
+    ElMessage.error('重置失败: ' + (e.response?.data?.detail || e.message))
+  } finally {
+    resetting.value = false
+  }
+}
+
 async function startTransfer() {
   try {
     await ElMessageBox.confirm('确认开始数据传导？默认会覆盖目的库。', '操作确认',
@@ -153,6 +176,9 @@ async function startTransfer() {
   running.value = true
   logs.value = []
   elapsed.value = 0
+  taskDone.value = false
+  hasTgz.value = false
+  downloadName.value = ''
   startTimer()
   try {
     const { data } = await api.conduction.start(config)
@@ -173,16 +199,35 @@ function pollTask(id) {
     try {
       const { data } = await api.conduction.taskStatus(id)
       logs.value = data.logs || []
+      hasTgz.value = !!data.has_tgz
+      taskDone.value = data.status === 'done'
+      if (data.tgz_name) downloadName.value = data.tgz_name
       if (data.status === 'done') {
         clearInterval(pollTimer); pollTimer = null
         running.value = false
-        taskId.value = null
         stopTimer()
         const failed = (data.logs || []).some(l => !l.success)
         failed ? ElMessage.error('传导结束（含失败步骤，请查看日志）') : ElMessage.success('数据传导完成')
       }
     } catch { /* keep polling */ }
   }, 2500)
+}
+
+async function downloadTgz() {
+  if (!taskId.value) return
+  try {
+    const res = await api.conduction.download(taskId.value)
+    const url = URL.createObjectURL(res.data)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = downloadName.value || 'backup.tgz'
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+  } catch (e) {
+    ElMessage.error('下载失败: ' + (e.response?.data?.detail || e.message))
+  }
 }
 
 // ── timer ──
@@ -208,6 +253,8 @@ function formatSec(sec) {
 }
 
 const STATE_KEY = 'billsum_conduction_state'
+// bump when endpoint DEFAULTS change above, so stale cached config is discarded
+const DEFAULTS_VER = 1
 
 function patchEndpoint(target, src) {
   if (!src) return
@@ -230,6 +277,7 @@ async function loadServerConfig() {
 
 function saveState() {
   const s = {
+    defaultsVer: DEFAULTS_VER,
     config: { source: config.source, destination: config.destination },
     sourceTables: sourceTables.value,
     logs: logs.value,
@@ -237,6 +285,9 @@ function saveState() {
     timerRunning: timerRunning.value,
     timerStart,
     taskId: taskId.value,
+    hasTgz: hasTgz.value,
+    downloadName: downloadName.value,
+    taskDone: taskDone.value,
   }
   try { localStorage.setItem(STATE_KEY, JSON.stringify(s)) } catch { /* ignore */ }
 }
@@ -246,6 +297,7 @@ function loadState() {
     const raw = localStorage.getItem(STATE_KEY)
     if (!raw) return false
     const s = JSON.parse(raw)
+    if (s.defaultsVer !== DEFAULTS_VER) return false
     if (s.config?.source) patchEndpoint(config.source, s.config.source)
     if (s.config?.destination) patchEndpoint(config.destination, s.config.destination)
     sourceTables.value = s.sourceTables || []
@@ -254,12 +306,15 @@ function loadState() {
     timerRunning.value = !!s.timerRunning
     timerStart = s.timerStart || 0
     taskId.value = s.taskId || null
+    hasTgz.value = !!s.hasTgz
+    downloadName.value = s.downloadName || ''
+    taskDone.value = !!s.taskDone
     return true
   } catch { return false }
 }
 
 // persist working state across tab/route switches and page reloads
-watch([() => config, logs, elapsed, timerRunning, taskId, sourceTables], saveState, { deep: true })
+watch([() => config, logs, elapsed, timerRunning, taskId, sourceTables, hasTgz, downloadName, taskDone], saveState, { deep: true })
 
 onMounted(async () => {
   ensureTick()
@@ -279,12 +334,12 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.conduction-panel { padding: 4px; }
+.conduction-panel { padding: 4px; height: 100%; overflow-x: hidden; overflow-y: auto; }
 .ep-title { font-weight: bold; }
 .timer-bar { text-align: center; margin-top: 12px; font-family: Consolas, monospace; font-size: 14px; color: #606266; }
 .timer-running { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #67c23a; margin-left: 6px; vertical-align: middle; animation: blink 1s infinite; }
 @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
-.log-area { margin-top: 12px; background: #1e1e1e; padding: 12px; border-radius: 4px; max-height: 320px; overflow-y: auto; }
+.log-area { margin-top: 12px; background: #1e1e1e; padding: 12px; border-radius: 4px; min-height: 320px; }
 .log-line { font-family: Consolas, monospace; font-size: 13px; line-height: 1.8; }
 .log-ts { color: #909399; margin-right: 8px; }
 .log-step { color: #56b6c2; margin-right: 6px; }

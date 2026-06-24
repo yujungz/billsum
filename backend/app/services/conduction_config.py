@@ -54,20 +54,38 @@ class CondConfig(BaseModel):
 
 def _default_source() -> CondEndpoint:
     return CondEndpoint(
-        deploy_type="local",
+        deploy_type="remote",
         run_mode="docker",
-        os_type="windows",
-        db=CondDB(password="123456", db_name="shadow_manager"),
+        os_type="linux",
+        ssh=CondSSH(
+            auth_method="key",
+            user="root",
+            host="shadowdev.burncloud.cn",
+            port=22,
+            remote_path="~/data/",
+            key_path=r"E:\work\(03)burncloud\ssh\host20260311",
+        ),
+        db=CondDB(
+            user="root",
+            password="burncloud123456qwe",
+            db_name="shadow_manager",
+            container_name="shadow-manager-dev-mysql",
+            host="localhost",
+        ),
     )
 
 
 def _default_destination() -> CondEndpoint:
     return CondEndpoint(
-        deploy_type="remote",
+        deploy_type="local",
         run_mode="docker",
-        os_type="linux",
-        ssh=CondSSH(auth_method="key", user="root", port=22, remote_path="~/data/"),
-        db=CondDB(password="burncloud123456qwe", db_name="shadow_manager"),
+        os_type="windows",
+        db=CondDB(
+            user="root",
+            password="123456",
+            db_name="shadow_manager",
+            container_name="test-mysql8",
+        ),
     )
 
 

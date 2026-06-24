@@ -4,7 +4,7 @@
       <template #header><span class="card-title">数据传输</span></template>
 
       <el-tabs v-model="activeTab" class="transfer-tabs">
-        <el-tab-pane label="数据传输" name="transfer">
+        <el-tab-pane label="业务数据" name="transfer">
           <div class="transfer-layout">
           <el-form :model="form" label-width="100px" inline>
             <el-form-item>

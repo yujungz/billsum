@@ -53,23 +53,21 @@ def qpath(ep: CondEndpoint, s) -> str:
 
 # ============================================================ LOCAL (argv) ===
 
-def _local_client_argv(ep: CondEndpoint, tool: str, interactive: bool = False) -> list[str]:
-    """Prefix argv for a mysql/mysqldump client running on the host.
+def _local_client_argv(ep: CondEndpoint, tool: str) -> list[str]:
+    """Prefix argv for a mysql/mysqldump client running where the backend runs.
 
-    docker mode: `docker exec [-i] <container> <tool> ...` (mysql talks to the
-                 DB inside the container over localhost — no host/port).
-    host mode:   `<tool> --host --port --skip-ssl ...` (TCP to a host-installed DB).
+    Both modes connect over TCP (the backend process has the mysql/mysqldump
+    CLI but typically NOT the `docker` CLI — e.g. the billsum-app container —
+    so we do NOT shell out to `docker exec`):
+      docker mode -> host = container_name (resolves on the docker network,
+                     same pattern the rest of the app uses via MYSQL_HOST).
+      host mode   -> host = the configured 服务器, port = db.port.
     """
     db = _db(ep)
-    if ep.run_mode == "docker":
-        argv = ["docker", "exec"]
-        if interactive:
-            argv.append("-i")
-        argv += [db.container_name, tool, CHARSET, f"--user={db.user}", f"--password={db.password}"]
-        return argv
+    host = db.container_name if ep.run_mode == "docker" else db.host
     return [
         tool, CHARSET,
-        f"--host={db.host}", f"--port={db.port}",
+        f"--host={host}", f"--port={db.port}",
         f"--user={db.user}", f"--password={db.password}",
         "--skip-ssl",
     ]
@@ -94,7 +92,7 @@ def local_import_argv(ep: CondEndpoint, db_name: str, full: bool) -> list[str]:
     full dump carries its own `USE`/`CREATE DATABASE`, so no positional db.
     selective dump has none, so the target db is passed positionally.
     """
-    argv = _local_client_argv(ep, MYSQL_BIN, interactive=True)
+    argv = _local_client_argv(ep, MYSQL_BIN)
     if not full:
         argv.append(db_name)
     return argv
