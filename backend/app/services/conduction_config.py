@@ -45,9 +45,33 @@ class CondEndpoint(BaseModel):
     all_checked: bool = False
 
 
+class CondGroup(BaseModel):
+    name: str
+    source: CondEndpoint
+    destination: CondEndpoint
+
+
 class CondConfig(BaseModel):
-    source: CondEndpoint = CondEndpoint()
-    destination: CondEndpoint = CondEndpoint()
+    groups: list[CondGroup] = []
+    selected: str = "默认配置"
+
+
+DEFAULT_GROUP_NAME = "默认配置"
+
+
+def _host_segment(ep: CondEndpoint) -> str:
+    """Hostname segment for group naming: local→localhost; remote→first dot-segment of ssh.host."""
+    if ep.deploy_type == "local":
+        return "localhost"
+    h = (ep.ssh.host or "").strip()
+    if not h:
+        return "remote"
+    return h.split(".")[0]
+
+
+def group_name(source: CondEndpoint, destination: CondEndpoint) -> str:
+    """Auto-name a config group from both endpoints: 'srcHost:srcDb → dstHost:dstDb'."""
+    return f"{_host_segment(source)}:{source.db.db_name} → {_host_segment(destination)}:{destination.db.db_name}"
 
 
 # ---- defaults per the spec -------------------------------------------------
@@ -63,7 +87,7 @@ def _default_source() -> CondEndpoint:
             host="shadowdev.burncloud.cn",
             port=22,
             remote_path="~/data/",
-            key_path=r"E:\work\(03)burncloud\ssh\host20260311",
+            key_path="/app/data/ssh_keys/host20260311",
         ),
         db=CondDB(
             user="root",
@@ -78,22 +102,43 @@ def _default_source() -> CondEndpoint:
 def _default_destination() -> CondEndpoint:
     return CondEndpoint(
         deploy_type="local",
-        run_mode="docker",
+        run_mode="host",
         os_type="windows",
         db=CondDB(
             user="root",
             password="123456",
             db_name="shadow_manager",
-            container_name="test-mysql8",
+            host="172.20.0.3",
+            port=3306,
         ),
     )
 
 
 def default_config() -> CondConfig:
-    return CondConfig(source=_default_source(), destination=_default_destination())
+    g = CondGroup(name=DEFAULT_GROUP_NAME, source=_default_source(), destination=_default_destination())
+    return CondConfig(groups=[g], selected=DEFAULT_GROUP_NAME)
 
 
 # ---- load / save -----------------------------------------------------------
+
+def sanitize(cfg: CondConfig) -> CondConfig:
+    """Ensure the built-in default group is present, first, and unmodifiable;
+    ensure `selected` refers to an existing group."""
+    default_grp = default_config().groups[0]
+    cfg.groups = [g for g in cfg.groups if g.name != DEFAULT_GROUP_NAME]
+    cfg.groups.insert(0, default_grp)
+    # drop duplicates (keep first occurrence) beyond the default
+    seen = {DEFAULT_GROUP_NAME}
+    uniq = [cfg.groups[0]]
+    for g in cfg.groups[1:]:
+        if g.name not in seen:
+            seen.add(g.name)
+            uniq.append(g)
+    cfg.groups = uniq
+    if not cfg.selected or not any(g.name == cfg.selected for g in cfg.groups):
+        cfg.selected = DEFAULT_GROUP_NAME
+    return cfg
+
 
 def load() -> CondConfig:
     """Load conduction config; fall back to defaults if missing/corrupt."""
@@ -101,10 +146,7 @@ def load() -> CondConfig:
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            # merge over defaults so new fields are filled when schema grows
-            base = default_config().model_dump()
-            base.update(data or {})
-            return CondConfig(**base)
+            return sanitize(CondConfig(**(data or {})))
         except Exception:
             # corrupt file → don't crash the whole feature; return defaults
             return default_config()
@@ -112,6 +154,7 @@ def load() -> CondConfig:
 
 
 def save(cfg: CondConfig) -> None:
+    sanitize(cfg)
     CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(cfg.model_dump(), f, ensure_ascii=False, indent=2)

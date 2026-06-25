@@ -6,7 +6,7 @@
         <el-radio value="remote">远程</el-radio>
       </el-radio-group>
     </el-form-item>
-    <el-form-item label="运行模式">
+    <el-form-item v-if="endpoint.deploy_type === 'remote'" label="运行模式">
       <el-radio-group v-model="endpoint.run_mode">
         <el-radio value="docker">docker</el-radio>
         <el-radio value="host">本机</el-radio>
@@ -86,7 +86,7 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Connection, Search, Link, Upload } from '@element-plus/icons-vue'
 import api from '../api'
@@ -96,6 +96,12 @@ const props = defineProps({
   which: { type: String, default: 'source' },
 })
 const emit = defineEmits(['tables'])
+
+// 本地部署只能用本机模式：应用跑在容器里，无法用 docker 命令访问容器内的库，
+// 只能用「服务器名」走 TCP 访问。选「本地」时强制 run_mode=host。
+watch(() => props.endpoint.deploy_type, (dt) => {
+  if (dt === 'local') props.endpoint.run_mode = 'host'
+}, { immediate: true })
 
 const sshLoading = ref(false)
 const dbLoading = ref(false)

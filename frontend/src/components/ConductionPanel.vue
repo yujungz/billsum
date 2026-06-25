@@ -1,5 +1,18 @@
 <template>
   <div class="conduction-panel">
+    <div class="group-bar">
+      <span class="group-label">参数组配置</span>
+      <el-select
+        :model-value="selectedName"
+        @change="onSelectGroup"
+        style="width: 360px"
+        placeholder="选择配置组"
+      >
+        <el-option v-for="g in groups" :key="g.name" :label="g.name" :value="g.name" />
+      </el-select>
+      <el-button v-if="!isDefaultSelected && selectedName" type="danger" plain size="small" :icon="Delete" :loading="deleting" @click="deleteGroup">删除</el-button>
+    </div>
+
     <el-row :gutter="12">
       <el-col :span="12">
         <el-card shadow="never">
@@ -20,6 +33,7 @@
     <el-space wrap>
       <el-button type="success" :icon="Files" @click="openTableDialog">表名选择…</el-button>
       <el-tag :type="modeTag" effect="plain">{{ modeHint }}</el-tag>
+      <el-checkbox v-model="addNew" :disabled="isDefaultSelected">新增</el-checkbox>
       <el-button type="primary" :loading="saving" @click="saveConfig">保存配置</el-button>
       <el-button :loading="resetting" @click="resetConfig">重置配置</el-button>
       <el-button type="danger" :disabled="running" :loading="starting" @click="startTransfer">开始传导</el-button>
@@ -53,10 +67,12 @@
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Files, Download } from '@element-plus/icons-vue'
+import { Files, Download, Delete } from '@element-plus/icons-vue'
 import api from '../api'
 import ConductionEndpointForm from './ConductionEndpointForm.vue'
 import ConductionTableSelect from './ConductionTableSelect.vue'
+
+const DEFAULT_GROUP_NAME = '默认配置'
 
 function defaultEndpoint(over) {
   return {
@@ -68,14 +84,26 @@ function defaultEndpoint(over) {
   }
 }
 
+// current editable endpoints (loaded from the selected group)
 const config = reactive({
   source: defaultEndpoint({
     deploy_type: 'remote', run_mode: 'docker', os_type: 'linux',
-    ssh: { auth_method: 'key', password: '', key_path: 'E:\\work\\(03)burncloud\\ssh\\host20260311', user: 'root', host: 'shadowdev.burncloud.cn', port: 22, remote_path: '~/data/' },
+    ssh: { auth_method: 'key', password: '', key_path: '/app/data/ssh_keys/host20260311', user: 'root', host: 'shadowdev.burncloud.cn', port: 22, remote_path: '~/data/' },
     db: { user: 'root', password: 'burncloud123456qwe', db_name: 'shadow_manager', container_name: 'shadow-manager-dev-mysql', host: 'localhost', port: 3306 },
   }),
-  destination: defaultEndpoint({ os_type: 'windows', db: { user: 'root', password: '123456', db_name: 'shadow_manager', container_name: 'test-mysql8', host: '', port: 3306 } }),
+  destination: defaultEndpoint({ deploy_type: 'local', run_mode: 'host', os_type: 'windows', db: { user: 'root', password: '123456', db_name: 'shadow_manager', container_name: '', host: '172.20.0.3', port: 3306 } }),
 })
+
+// config groups + selection
+const groups = ref([])
+const selectedName = ref('')
+const addNew = ref(false)
+const isDefaultSelected = computed(() => selectedName.value === DEFAULT_GROUP_NAME)
+
+// when the default group becomes selected, lock the 新增 checkbox (checked+disabled)
+watch(isDefaultSelected, (d) => {
+  if (d) addNew.value = true
+}, { immediate: true })
 
 const sourceTables = ref([])
 const tableDialog = ref(false)
@@ -83,6 +111,7 @@ const tablesLoading = ref(false)
 
 const saving = ref(false)
 const resetting = ref(false)
+const deleting = ref(false)
 const starting = ref(false)
 const running = ref(false)
 const taskId = ref(null)
@@ -110,6 +139,63 @@ const modeTag = computed(() => {
   if (all) return 'success'
   return s.selected_tables.length ? 'warning' : 'info'
 })
+
+// ── group naming (mirrors backend group_name) ──
+function hostSegment(ep) {
+  if (ep.deploy_type === 'local') return 'localhost'
+  const h = (ep.ssh?.host || '').trim()
+  if (!h) return 'remote'
+  return h.split('.')[0]
+}
+function groupName(src, dst) {
+  return `${hostSegment(src)}:${src.db.db_name} → ${hostSegment(dst)}:${dst.db.db_name}`
+}
+
+function patchEndpoint(target, src) {
+  if (!src) return
+  target.deploy_type = src.deploy_type ?? target.deploy_type
+  target.run_mode = src.run_mode ?? target.run_mode
+  target.os_type = src.os_type ?? target.os_type
+  target.selected_tables = Array.isArray(src.selected_tables) ? src.selected_tables : target.selected_tables
+  target.all_checked = typeof src.all_checked === 'boolean' ? src.all_checked : target.all_checked
+  if (src.ssh) target.ssh = { ...target.ssh, ...src.ssh }
+  if (src.db) target.db = { ...target.db, ...src.db }
+}
+
+function loadGroupIntoForm(name) {
+  const g = groups.value.find(x => x.name === name)
+  if (!g) return
+  patchEndpoint(config.source, g.source)
+  patchEndpoint(config.destination, g.destination)
+}
+
+function onSelectGroup(name) {
+  selectedName.value = name
+  loadGroupIntoForm(name)
+  sourceTables.value = []
+  // req 5: default → 新增 locked (checked+disabled); otherwise revert to unchecked
+  addNew.value = (name === DEFAULT_GROUP_NAME)
+}
+
+async function deleteGroup() {
+  if (isDefaultSelected.value || !selectedName.value) return
+  try {
+    await ElMessageBox.confirm(`确定删除配置组「${selectedName.value}」？`, '删除配置组',
+      { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' })
+  } catch { return }
+  deleting.value = true
+  try {
+    const newGroups = groups.value.filter(g => g.name !== selectedName.value)
+    await api.conduction.saveConfig({ groups: newGroups, selected: DEFAULT_GROUP_NAME })
+    groups.value = newGroups
+    onSelectGroup(DEFAULT_GROUP_NAME)
+    ElMessage.success('已删除')
+  } catch (e) {
+    ElMessage.error('删除失败: ' + (e.response?.data?.detail || e.message))
+  } finally {
+    deleting.value = false
+  }
+}
 
 function onSourceTables(tables) {
   sourceTables.value = tables || []
@@ -140,8 +226,32 @@ async function openTableDialog() {
 async function saveConfig() {
   saving.value = true
   try {
-    await api.conduction.saveConfig(config)
+    const src = JSON.parse(JSON.stringify(config.source))
+    const dst = JSON.parse(JSON.stringify(config.destination))
+    const newGroups = groups.value.map(g => ({ name: g.name, source: g.source, destination: g.destination }))
+    if (addNew.value) {
+      // req 4: 新增 → create a new named group
+      const rand = String(Math.floor(Math.random() * 900) + 100)
+      const base = `${groupName(src, dst)}:${rand}`
+      let name = base, n = 2
+      while (newGroups.some(g => g.name === name)) { name = `${base} (${n})`; n++ }
+      newGroups.push({ name, source: src, destination: dst })
+      selectedName.value = name
+    } else {
+      // req 4: not 新增 → update the selected group (default is locked to 新增, so never here for default)
+      const idx = newGroups.findIndex(g => g.name === selectedName.value)
+      if (idx < 0) {
+        ElMessage.error('未找到当前配置组')
+        return
+      }
+      newGroups[idx] = { name: newGroups[idx].name, source: src, destination: dst }
+    }
+    await api.conduction.saveConfig({ groups: newGroups, selected: selectedName.value })
+    groups.value = newGroups
+    loadGroupIntoForm(selectedName.value)
     ElMessage.success('配置已保存')
+    // req 7: after save, 新增 reverts to unchecked (re-lock if default selected)
+    addNew.value = (selectedName.value === DEFAULT_GROUP_NAME)
   } catch (e) {
     ElMessage.error('保存失败: ' + (e.response?.data?.detail || e.message))
   } finally {
@@ -156,6 +266,7 @@ async function resetConfig() {
   } catch { return }
   resetting.value = true
   try {
+    selectedName.value = ''   // force loadServerConfig to pick the server-side selected group
     await loadServerConfig()
     sourceTables.value = []
     ElMessage.success('已恢复到最后保存的配置')
@@ -181,7 +292,7 @@ async function startTransfer() {
   downloadName.value = ''
   startTimer()
   try {
-    const { data } = await api.conduction.start(config)
+    const { data } = await api.conduction.start({ source: config.source, destination: config.destination })
     taskId.value = data.task_id
     starting.value = false
     pollTask(data.task_id)
@@ -253,32 +364,29 @@ function formatSec(sec) {
 }
 
 const STATE_KEY = 'billsum_conduction_state'
-// bump when endpoint DEFAULTS change above, so stale cached config is discarded
-const DEFAULTS_VER = 1
-
-function patchEndpoint(target, src) {
-  if (!src) return
-  target.deploy_type = src.deploy_type ?? target.deploy_type
-  target.run_mode = src.run_mode ?? target.run_mode
-  target.os_type = src.os_type ?? target.os_type
-  target.selected_tables = Array.isArray(src.selected_tables) ? src.selected_tables : target.selected_tables
-  target.all_checked = typeof src.all_checked === 'boolean' ? src.all_checked : target.all_checked
-  if (src.ssh) target.ssh = { ...target.ssh, ...src.ssh }
-  if (src.db) target.db = { ...target.db, ...src.db }
-}
+// bump when the persisted shape / endpoint defaults change, to drop stale cache
+const DEFAULTS_VER = 4
 
 async function loadServerConfig() {
   try {
     const { data } = await api.conduction.getConfig()
-    patchEndpoint(config.source, data.source)
-    patchEndpoint(config.destination, data.destination)
+    groups.value = data.groups || []
+    if (!selectedName.value || !groups.value.some(g => g.name === selectedName.value)) {
+      selectedName.value = data.selected || (groups.value[0]?.name || '')
+    }
+    loadGroupIntoForm(selectedName.value)
+    addNew.value = (selectedName.value === DEFAULT_GROUP_NAME)
   } catch { /* keep defaults */ }
 }
 
 function saveState() {
   const s = {
     defaultsVer: DEFAULTS_VER,
-    config: { source: config.source, destination: config.destination },
+    groups: groups.value,
+    selectedName: selectedName.value,
+    addNew: addNew.value,
+    source: config.source,
+    destination: config.destination,
     sourceTables: sourceTables.value,
     logs: logs.value,
     elapsed: elapsed.value,
@@ -298,8 +406,11 @@ function loadState() {
     if (!raw) return false
     const s = JSON.parse(raw)
     if (s.defaultsVer !== DEFAULTS_VER) return false
-    if (s.config?.source) patchEndpoint(config.source, s.config.source)
-    if (s.config?.destination) patchEndpoint(config.destination, s.config.destination)
+    groups.value = s.groups || []
+    selectedName.value = s.selectedName || ''
+    addNew.value = !!s.addNew
+    if (s.source) patchEndpoint(config.source, s.source)
+    if (s.destination) patchEndpoint(config.destination, s.destination)
     sourceTables.value = s.sourceTables || []
     logs.value = s.logs || []
     elapsed.value = s.elapsed || 0
@@ -314,7 +425,11 @@ function loadState() {
 }
 
 // persist working state across tab/route switches and page reloads
-watch([() => config, logs, elapsed, timerRunning, taskId, sourceTables, hasTgz, downloadName, taskDone], saveState, { deep: true })
+watch(
+  [() => config, groups, selectedName, addNew, logs, elapsed, timerRunning, taskId, sourceTables, hasTgz, downloadName, taskDone],
+  saveState,
+  { deep: true }
+)
 
 onMounted(async () => {
   ensureTick()
@@ -335,6 +450,8 @@ onUnmounted(() => {
 
 <style scoped>
 .conduction-panel { padding: 4px; height: 100%; overflow-x: hidden; overflow-y: auto; }
+.group-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.group-label { color: #606266; font-size: 14px; }
 .ep-title { font-weight: bold; }
 .timer-bar { text-align: center; margin-top: 12px; font-family: Consolas, monospace; font-size: 14px; color: #606266; }
 .timer-running { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #67c23a; margin-left: 6px; vertical-align: middle; animation: blink 1s infinite; }

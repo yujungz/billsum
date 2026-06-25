@@ -104,6 +104,16 @@ def local_show_tables_argv(ep: CondEndpoint) -> list[str]:
     return argv
 
 
+def local_ping_argv(ep: CondEndpoint) -> list[str]:
+    """Test server connectivity only — no db arg."""
+    return _local_client_argv(ep, MYSQL_BIN) + ["-e", "SELECT 1"]
+
+
+def local_show_databases_argv(ep: CondEndpoint) -> list[str]:
+    """List databases on the server — no db arg."""
+    return _local_client_argv(ep, MYSQL_BIN) + ["-e", "SHOW DATABASES"]
+
+
 def local_create_db_argv(ep: CondEndpoint, db_name: str) -> list[str]:
     argv = _local_client_argv(ep, MYSQL_BIN)
     argv += ["-e", f"CREATE DATABASE IF NOT EXISTS `{db_name}` "
@@ -147,6 +157,16 @@ def remote_import_cmd(ep: CondEndpoint, db_name: str, full: bool, in_file: str) 
 def remote_show_tables_cmd(ep: CondEndpoint) -> str:
     base = _remote_client_str(ep, MYSQL_BIN)
     return f"{base} -e {qval(ep, 'SHOW TABLES')} {qval(ep, _db(ep).db_name)}"
+
+
+def remote_ping_cmd(ep: CondEndpoint) -> str:
+    """Test server connectivity only — no db arg."""
+    return f"{_remote_client_str(ep, MYSQL_BIN)} -e {qval(ep, 'SELECT 1')}"
+
+
+def remote_show_databases_cmd(ep: CondEndpoint) -> str:
+    """List databases on the server — no db arg."""
+    return f"{_remote_client_str(ep, MYSQL_BIN)} -e {qval(ep, 'SHOW DATABASES')}"
 
 
 def remote_create_db_cmd(ep: CondEndpoint, db_name: str) -> str:

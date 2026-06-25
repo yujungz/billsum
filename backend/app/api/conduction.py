@@ -6,12 +6,18 @@ settings_api.py (connection tests). Does not touch existing modules.
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
 from app.services import conduction_config
 from app.services import conduction_service
 from app.services.conduction_config import CondConfig, CondEndpoint
 
 router = APIRouter(prefix="/api/conduction", tags=["conduction"])
+
+
+class StartRequest(BaseModel):
+    source: CondEndpoint
+    destination: CondEndpoint
 
 
 @router.get("/config")
@@ -21,7 +27,8 @@ async def get_config():
 
 @router.put("/config")
 async def put_config(cfg: CondConfig):
-    conduction_config.save(cfg)
+    # sanitize protects the built-in default group (always first, unmodifiable)
+    conduction_config.save(conduction_config.sanitize(cfg))
     return {"success": True}
 
 
@@ -49,11 +56,11 @@ async def refresh_tables(ep: CondEndpoint):
 
 
 @router.post("/start")
-async def start(cfg: CondConfig):
-    src = cfg.source
+async def start(req: StartRequest):
+    src = req.source
     if not src.all_checked and not src.selected_tables:
         raise HTTPException(400, detail="请至少选择一张表，或勾选「全部」按整库备份")
-    task_id = conduction_service.start_task(cfg)
+    task_id = conduction_service.start_task(src, req.destination)
     return {"task_id": task_id}
 
 

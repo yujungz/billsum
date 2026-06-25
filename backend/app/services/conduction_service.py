@@ -40,7 +40,7 @@ _tasks: dict[str, dict] = {}
 #  Task lifecycle
 # --------------------------------------------------------------------------- #
 
-def start_task(cfg: CondConfig) -> str:
+def start_task(src: CondEndpoint, dst: CondEndpoint) -> str:
     task_id = uuid.uuid4().hex[:8]
     _tasks[task_id] = {
         "task_id": task_id,
@@ -52,7 +52,7 @@ def start_task(cfg: CondConfig) -> str:
 
     async def _run():
         try:
-            await run_all(task_id, cfg)
+            await run_all(task_id, src, dst)
         except Exception as e:
             log.exception("conduction task %s crashed", task_id)
             _append_log(task_id, "错误", False, str(e))
@@ -113,26 +113,58 @@ def test_ssh(ep: CondEndpoint) -> tuple[bool, str]:
     return conduction_ssh.test_connection(ep)
 
 
+def _run_client(ep: CondEndpoint, kind: str) -> str:
+    """Run a mysql client command against an endpoint.
+    kind: 'ping' | 'databases' | 'tables'. Returns stdout text or raises."""
+    if ep.deploy_type == "remote":
+        cmd = {
+            "ping": cc.remote_ping_cmd,
+            "databases": cc.remote_show_databases_cmd,
+            "tables": cc.remote_show_tables_cmd,
+        }[kind](ep)
+        code, out, err = conduction_ssh.exec_remote(ep, cmd, timeout=60)
+        if code != 0:
+            raise RuntimeError((err or out).strip()[:300])
+        return out
+    argv = {
+        "ping": cc.local_ping_argv,
+        "databases": cc.local_show_databases_argv,
+        "tables": cc.local_show_tables_argv,
+    }[kind](ep)
+    proc = subprocess.run(argv, capture_output=True, timeout=60)
+    if proc.returncode != 0:
+        raise RuntimeError(proc.stderr.decode("utf-8", "replace").strip()[:300])
+    return proc.stdout.decode("utf-8", "replace")
+
+
 def test_db(ep: CondEndpoint) -> tuple[bool, str, list[str]]:
+    """Two-step DB test: (1) ping server without db name, (2) check db exists.
+    A non-existing db is NOT an error — destination dbs may be created on import.
+    """
+    # step 1: server connectivity (no db arg)
     try:
-        tables = fetch_tables(ep)
-        return True, f"数据库连接成功，共 {len(tables)} 张表", tables
+        _run_client(ep, "ping")
     except Exception as e:
-        return False, str(e), []
+        return False, f"服务器连接失败: {e}", []
+    # step 2: database existence
+    try:
+        dbs = _parse_list(_run_client(ep, "databases"))
+    except Exception as e:
+        return False, f"服务器连接成功，但获取数据库列表失败: {e}", []
+    exists = ep.db.db_name in dbs
+    msg = f"服务器连接成功；数据库 {ep.db.db_name} {'存在' if exists else '不存在'}"
+    tables: list[str] = []
+    if exists:
+        try:
+            tables = _parse_tables(_run_client(ep, "tables"))
+        except Exception:
+            tables = []
+    return True, msg, tables
 
 
 def fetch_tables(ep: CondEndpoint) -> list[str]:
     """Run SHOW TABLES against an endpoint (local subprocess or remote SSH)."""
-    if ep.deploy_type == "remote":
-        code, out, err = conduction_ssh.exec_remote(ep, cc.remote_show_tables_cmd(ep), timeout=60)
-        if code != 0:
-            raise RuntimeError(f"获取远程表清单失败: {(err or out).strip()[:300]}")
-        return _parse_tables(out)
-    argv = cc.local_show_tables_argv(ep)
-    proc = subprocess.run(argv, capture_output=True, timeout=60)
-    if proc.returncode != 0:
-        raise RuntimeError(f"获取本地表清单失败: {proc.stderr.decode('utf-8', 'replace').strip()[:300]}")
-    return _parse_tables(proc.stdout.decode("utf-8", "replace"))
+    return _parse_tables(_run_client(ep, "tables"))
 
 
 def _parse_tables(out: str) -> list[str]:
@@ -146,6 +178,19 @@ def _parse_tables(out: str) -> list[str]:
             continue
         tables.append(s)
     return tables
+
+
+def _parse_list(out: str) -> list[str]:
+    """Parse SHOW DATABASES output (header row is 'Database')."""
+    items = []
+    for i, line in enumerate(out.strip().splitlines()):
+        s = line.strip()
+        if not s:
+            continue
+        if i == 0 and s.lower() == "database":
+            continue
+        items.append(s)
+    return items
 
 
 def _determine_full(ep: CondEndpoint, available: list[str]) -> tuple[bool, list[str]]:
@@ -349,9 +394,7 @@ async def _phase_import(task_id, dst, full, tables, local_tgz, sql_name, work):
 #  Pipeline
 # --------------------------------------------------------------------------- #
 
-async def run_all(task_id: str, cfg: CondConfig):
-    src = cfg.source
-    dst = cfg.destination
+async def run_all(task_id: str, src: CondEndpoint, dst: CondEndpoint):
     work = COND_DIR / task_id
     work.mkdir(parents=True, exist_ok=True)
 
