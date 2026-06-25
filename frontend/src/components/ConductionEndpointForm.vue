@@ -1,16 +1,19 @@
 <template>
   <el-form :model="endpoint" label-width="90px" size="small" class="ep-form">
     <el-form-item label="部署类型">
-      <el-radio-group v-model="endpoint.deploy_type">
-        <el-radio value="local">本地</el-radio>
-        <el-radio value="remote">远程</el-radio>
-      </el-radio-group>
-    </el-form-item>
-    <el-form-item v-if="endpoint.deploy_type === 'remote'" label="运行模式">
-      <el-radio-group v-model="endpoint.run_mode">
-        <el-radio value="docker">docker</el-radio>
-        <el-radio value="host">本机</el-radio>
-      </el-radio-group>
+      <div class="field-row">
+        <el-radio-group v-model="endpoint.deploy_type">
+          <el-radio value="local">本地</el-radio>
+          <el-radio value="remote">远程</el-radio>
+        </el-radio-group>
+        <template v-if="endpoint.deploy_type === 'remote'">
+          <span class="sub-label">运行模式</span>
+          <el-radio-group v-model="endpoint.run_mode">
+            <el-radio value="docker">docker</el-radio>
+            <el-radio value="host">本机</el-radio>
+          </el-radio-group>
+        </template>
+      </div>
     </el-form-item>
     <el-form-item label="操作系统">
       <el-radio-group v-model="endpoint.os_type">
@@ -38,13 +41,13 @@
         <el-input v-model="endpoint.ssh.password" type="password" show-password />
       </el-form-item>
       <el-form-item label="用户名">
-        <el-input v-model="endpoint.ssh.user" />
-      </el-form-item>
-      <el-form-item label="主机">
-        <el-input v-model="endpoint.ssh.host" placeholder="IP 或域名" />
-      </el-form-item>
-      <el-form-item label="端口">
-        <el-input-number v-model="endpoint.ssh.port" :min="1" :max="65535" controls-position="right" />
+        <div class="field-row">
+          <el-input v-model="endpoint.ssh.user" />
+          <span class="sub-label">主机</span>
+          <el-input v-model="endpoint.ssh.host" placeholder="IP/域名" />
+          <span class="sub-label">端口</span>
+          <el-input-number v-model="endpoint.ssh.port" :min="1" :max="65535" controls-position="right" />
+        </div>
       </el-form-item>
       <el-form-item label="远程路径">
         <el-input v-model="endpoint.ssh.remote_path" :placeholder="endpoint.os_type === 'windows' ? 'c:\\data' : '~/data/'" />
@@ -58,10 +61,11 @@
     <!-- Database block -->
     <el-divider content-position="left">数据库</el-divider>
     <el-form-item label="用户名">
-      <el-input v-model="endpoint.db.user" />
-    </el-form-item>
-    <el-form-item label="密码">
-      <el-input v-model="endpoint.db.password" type="password" show-password />
+      <div class="field-row">
+        <el-input v-model="endpoint.db.user" />
+        <span class="sub-label">密码</span>
+        <el-input v-model="endpoint.db.password" type="password" show-password />
+      </div>
     </el-form-item>
     <el-form-item label="数据库名">
       <el-input v-model="endpoint.db.db_name" />
@@ -71,10 +75,11 @@
     </el-form-item>
     <template v-else>
       <el-form-item label="服务器">
-        <el-input v-model="endpoint.db.host" />
-      </el-form-item>
-      <el-form-item label="端口">
-        <el-input-number v-model="endpoint.db.port" :min="1" :max="65535" controls-position="right" />
+        <div class="field-row">
+          <el-input v-model="endpoint.db.host" />
+          <span class="sub-label">端口</span>
+          <el-input-number v-model="endpoint.db.port" :min="1" :max="65535" controls-position="right" />
+        </div>
       </el-form-item>
     </template>
     <el-form-item>
@@ -170,6 +175,10 @@ function triggerMount() {
 <style scoped>
 .ep-form :deep(.el-form-item) { margin-bottom: 12px; }
 .ep-form :deep(.el-divider) { margin: 8px 0 14px; }
+.field-row { display: flex; gap: 16px; align-items: center; width: 100%; flex-wrap: wrap; }
+.field-row .sub-label { color: #606266; font-size: 12px; white-space: nowrap; }
+.field-row :deep(.el-input) { flex: 1; min-width: 70px; }
+.field-row :deep(.el-input-number) { width: 120px; flex-shrink: 0; }
 .result-line { flex-basis: 100%; margin-top: 6px; font-size: 12px; font-family: Consolas, monospace; word-break: break-all; line-height: 1.5; }
 .result-line.ok { color: #67c23a; }
 .result-line.err { color: #f56c6c; }
