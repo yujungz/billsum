@@ -70,6 +70,7 @@ async def export_table(
     table: str = Query(...),
     format: str = Query("xlsx"),
     filters: str = Query(None),
+    fields: str = Query(None),
 ):
     _validate_table(table)
     import json
@@ -85,14 +86,15 @@ async def export_table(
         )
 
     columns, rows = await query_service.export_all_data(site, table, f)
+    cols = _apply_fields(columns, fields)
 
     if format == "csv":
         output = io.StringIO()
         output.write('﻿')
         writer = csv.writer(output)
-        writer.writerow([c['name'] for c in columns])
+        writer.writerow([c['label'] for c in cols])
         for row in rows:
-            writer.writerow([str(row.get(c['name'], '')) for c in columns])
+            writer.writerow([str(row.get(c['name'], '')) for c in cols])
         return Response(
             content=output.getvalue(),
             media_type="text/csv; charset=utf-8",
@@ -100,12 +102,34 @@ async def export_table(
         )
 
     # xlsx - openpyxl
-    content = _build_xlsx(columns, rows)
+    content = _build_xlsx(cols, rows)
     return Response(
         content=content,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename={fn}.xlsx"},
     )
+
+
+def _apply_fields(columns, fields_json):
+    """Filter/rename columns per the field-selection config.
+    fields_json: JSON '[{"name":..,"label":..}, ...]' (selected fields in order).
+    None/invalid → all columns, label = field name.
+    """
+    default = [{"name": c["name"], "label": c["name"]} for c in columns]
+    if not fields_json:
+        return default
+    import json
+    try:
+        flds = json.loads(fields_json)
+    except Exception:
+        return default
+    db_names = {c["name"] for c in columns}
+    out = []
+    for x in flds:
+        nm = x.get("name")
+        if nm in db_names:
+            out.append({"name": nm, "label": x.get("label") or nm})
+    return out or default
 
 
 def _build_xlsx(columns, rows):
@@ -117,8 +141,8 @@ def _build_xlsx(columns, rows):
     ws.title = "Data"
     bold = Font(bold=True)
     for ci, c in enumerate(columns, 1):
-        ws.cell(row=1, column=ci, value=c['name']).font = bold
-        ws.column_dimensions[openpyxl.utils.get_column_letter(ci)].width = max(len(str(c['name'])) * 2, 12)
+        ws.cell(row=1, column=ci, value=c['label']).font = bold
+        ws.column_dimensions[openpyxl.utils.get_column_letter(ci)].width = max(len(str(c['label'])) * 2, 12)
     for ri, row in enumerate(rows, 2):
         for ci, c in enumerate(columns, 1):
             ws.cell(row=ri, column=ci, value=row.get(c['name'], ''))

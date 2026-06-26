@@ -21,6 +21,7 @@
             </el-select>
           </el-form-item>
           <el-form-item>
+            <el-button type="info" plain :icon="Operation" :disabled="!selectedTable" @click="openFieldDialog">字段选择</el-button>
             <el-button type="primary" :loading="loading" @click="doQuery">查询</el-button>
             <el-button type="danger" @click="deleteConfirm">删除表</el-button>
             <el-dropdown split-button type="success" @click="exportConfirm('xlsx')" @command="exportConfirm">
@@ -75,7 +76,7 @@
 
         <div ref="tableWrapper" class="table-wrapper">
           <el-table :data="tableData" border stripe :height="tableHeight" v-loading="loading" style="width: 100%">
-            <el-table-column v-for="col in columns" :key="col.name" :prop="col.name" :label="col.name"
+            <el-table-column v-for="col in displayColumns" :key="col.name" :prop="col.name" :label="col.label"
               :min-width="getColumnWidth(col)" show-overflow-tooltip />
           </el-table>
         </div>
@@ -88,12 +89,37 @@
         />
       </div>
     </el-card>
+
+    <el-dialog v-model="fieldDialog" :title="`字段选择 — ${selectedTable}`" width="680px" append-to-body>
+      <div class="field-dialog-toolbar">
+        <el-checkbox v-model="fieldAll">全选</el-checkbox>
+        <span class="field-count">{{ fieldSelectedCount }}/{{ fieldRows.length }} 字段</span>
+      </div>
+      <el-table :data="fieldRows" border max-height="440" size="small">
+        <el-table-column label="显示" width="64" align="center">
+          <template #default="{ row }">
+            <el-checkbox v-model="row.selected" />
+          </template>
+        </el-table-column>
+        <el-table-column label="字段名" prop="name" width="220" />
+        <el-table-column label="中文标题">
+          <template #default="{ row }">
+            <el-input v-model="row.label" placeholder="留空则用字段名" />
+          </template>
+        </el-table-column>
+      </el-table>
+      <template #footer>
+        <el-button @click="fieldDialog = false">取消</el-button>
+        <el-button type="primary" @click="saveFields">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Operation } from '@element-plus/icons-vue'
 import api from '../api'
 import PaginationBar from '../components/PaginationBar.vue'
 
@@ -128,6 +154,72 @@ function startTimer() {
 function stopTimer(t0, timer) {
   clearInterval(timer)
   exportTimerText.value = `耗时 ${((Date.now() - t0) / 1000).toFixed(1)}s`
+}
+
+// ── Field selection (column visibility + Chinese labels) ──
+const FIELDS_KEY_PREFIX = 'billsum_query_fields_'
+const fieldConfig = reactive({})      // { colName: { selected, label } }
+const fieldRows = ref([])             // editable copy for the dialog
+const fieldDialog = ref(false)
+
+const displayColumns = computed(() =>
+  columns.value
+    .filter(c => fieldConfig[c.name]?.selected !== false)
+    .map(c => ({ name: c.name, label: fieldConfig[c.name]?.label || c.name }))
+)
+
+const fieldAll = computed({
+  get: () => fieldRows.value.length > 0 && fieldRows.value.every(r => r.selected),
+  set: (v) => { fieldRows.value.forEach(r => r.selected = v) },
+})
+const fieldSelectedCount = computed(() => fieldRows.value.filter(r => r.selected).length)
+
+function fieldConfigKey(table) {
+  // 统计版 logs 系列（logs* 且非 orig）结构相同，共用同一份字段配置
+  if (table && table.startsWith('logs') && !table.endsWith('orig')) return 'logs_output'
+  return table
+}
+
+function loadFieldConfig() {
+  const t = selectedTable.value
+  let saved = {}
+  if (t) {
+    try {
+      const raw = localStorage.getItem(FIELDS_KEY_PREFIX + fieldConfigKey(t))
+      saved = raw ? JSON.parse(raw) : {}
+    } catch { saved = {} }
+  }
+  Object.keys(fieldConfig).forEach(k => delete fieldConfig[k])
+  for (const c of columns.value) {
+    const s = saved[c.name]
+    fieldConfig[c.name] = (s && typeof s === 'object')
+      ? { selected: s.selected !== false, label: s.label || c.name }
+      : { selected: true, label: c.name }
+  }
+}
+
+function saveFieldConfig() {
+  if (!selectedTable.value) return
+  localStorage.setItem(FIELDS_KEY_PREFIX + fieldConfigKey(selectedTable.value), JSON.stringify(fieldConfig))
+}
+
+async function openFieldDialog() {
+  if (!columns.value.length) await loadColumns()
+  fieldRows.value = columns.value.map(c => ({
+    name: c.name,
+    selected: fieldConfig[c.name]?.selected !== false,
+    label: fieldConfig[c.name]?.label || c.name,
+  }))
+  fieldDialog.value = true
+}
+
+function saveFields() {
+  for (const r of fieldRows.value) {
+    fieldConfig[r.name] = { selected: r.selected, label: (r.label || r.name) }
+  }
+  saveFieldConfig()
+  fieldDialog.value = false
+  ElMessage.success('字段配置已保存')
 }
 
 // ── Filter config per table ──
@@ -211,6 +303,9 @@ const _columnsCache = reactive({})
 watch(selectedTable, () => {
   Object.keys(filterValues).forEach(k => delete filterValues[k])
 })
+
+// rebuild field selection when columns (re)load
+watch(columns, () => loadFieldConfig())
 
 function buildFilters() {
   const result = {}
@@ -336,7 +431,9 @@ async function exportConfirm(format) {
   const fileName = `${site.value}_${selectedTable.value}.${format === 'xlsx' ? 'xlsx' : format === 'csv' ? 'csv' : 'sql'}`
   const filters = buildFilters()
   const filterStr = filters ? JSON.stringify(filters) : ''
-  const url = `/api/query/export?site=${site.value}&table=${selectedTable.value}&format=${format}${filterStr ? `&filters=${encodeURIComponent(filterStr)}` : ''}`
+  const fieldsArr = displayColumns.value.map(c => ({ name: c.name, label: c.label }))
+  const fieldsStr = fieldsArr.length ? `&fields=${encodeURIComponent(JSON.stringify(fieldsArr))}` : ''
+  const url = `/api/query/export?site=${site.value}&table=${selectedTable.value}&format=${format}${filterStr ? `&filters=${encodeURIComponent(filterStr)}` : ''}${fieldsStr}`
 
   const { t0, timer } = startTimer()
   try {
@@ -478,6 +575,8 @@ async function doParse() {
   font-size: 13px;
   font-weight: 500;
 }
+.field-dialog-toolbar { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; }
+.field-count { color: #909399; font-size: 12px; }
 :deep(.el-card__body) {
   overflow: hidden !important;
 }

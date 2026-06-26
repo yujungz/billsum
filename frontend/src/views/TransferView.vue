@@ -4,7 +4,7 @@
       <template #header><span class="card-title">数据传输</span></template>
 
       <el-tabs v-model="activeTab" class="transfer-tabs">
-        <el-tab-pane label="业务数据" name="transfer">
+        <el-tab-pane label="业务数据下载" name="transfer">
           <div class="transfer-layout">
           <el-form :model="form" label-width="100px" inline>
             <el-form-item>
@@ -78,7 +78,7 @@
           </div>
         </el-tab-pane>
 
-        <el-tab-pane label="SQL 导入" name="sql">
+        <el-tab-pane label="SQL导入本地" name="sql">
           <el-form inline>
             <el-form-item label="站点">
               <el-select v-model="sqlSite" placeholder="选择站点" style="width: 160px">
@@ -91,7 +91,7 @@
           </el-form>
         </el-tab-pane>
 
-        <el-tab-pane label="数据传导" name="conduction" lazy>
+        <el-tab-pane label="远程数据传导" name="conduction" lazy>
           <ConductionPanel />
         </el-tab-pane>
       </el-tabs>

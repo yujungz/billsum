@@ -5,7 +5,7 @@
       <el-select
         :model-value="selectedName"
         @change="onSelectGroup"
-        style="width: 360px"
+        style="width: 480px"
         placeholder="选择配置组"
       >
         <el-option v-for="g in groups" :key="g.name" :label="g.name" :value="g.name" />
