@@ -234,6 +234,29 @@ async def export_remote(site: str, period_type: str, ym: str = "",
 
     # export logs if selected — detached background dump + poll (survives SSH drops)
     if "logs" in tables:
+        # pre-check: count matching rows, to surface "无数据" clearly before the dump
+        tbl_expr = "\\`" + rdb.db_name + "\\`.logs"
+        count_cmd = (
+            f"docker exec {rdb.container_name} mysql -uroot -p{rdb.password} -N "
+            f"-e \"SELECT COUNT(*) FROM {tbl_expr} WHERE type=2 "
+            f"AND created_at+28800 BETWEEN UNIX_TIMESTAMP('{time_begin}') "
+            f"AND UNIX_TIMESTAMP('{time_end}')\""
+        )
+        ck_code, ck_out, ck_err = ssh_service.exec_remote_command(
+            ssh_cfg, count_cmd, timeout=120)
+        if ck_code == 0:
+            try:
+                row_count = int(ck_out.strip())
+            except (ValueError, IndexError):
+                row_count = -1
+            if row_count == 0:
+                return {"success": False, "step": "export",
+                        "error": f"远程数据库 {rdb.db_name}.logs 中"
+                                 f"无符合条件的数据（{time_begin} ~ {time_end}，type=2）"}
+            log.info("导出前预检查: %s.%s 匹配 %d 行数据", rdb.db_name, "logs", row_count)
+        elif ck_code > 0:
+            log.warning("预检查查询失败(exit %d): %s，将继续尝试导出", ck_code, ck_err)
+
         export_cmd = sql_remote_export(
             site=site,
             container_name=rdb.container_name,
