@@ -22,7 +22,7 @@
           </el-form-item>
           <el-form-item>
             <template #label>
-              <el-checkbox v-model="groupAll">统计粒度</el-checkbox>
+              <el-checkbox v-model="groupAll" class="group-all">统计粒度</el-checkbox>
             </template>
             <el-checkbox-group v-model="form.group_by">
               <el-checkbox value="month">按月</el-checkbox>
@@ -156,11 +156,19 @@ const form = reactive({
   },
 })
 
-// 统计粒度全选
+// 统计粒度全选：勾选=选中全部；取消勾选=恢复勾选前的选择（而非清空）
 const GROUP_OPTIONS = ['month', 'day', 'user', 'channel', 'model', 'token', 'group', 'buyer', 'supplier', 'salesperson']
+let _prevGroupBy = []
 const groupAll = computed({
   get: () => GROUP_OPTIONS.every(g => form.group_by.includes(g)),
-  set: (v) => { form.group_by = v ? [...GROUP_OPTIONS] : [] },
+  set: (v) => {
+    if (v) {
+      _prevGroupBy = [...form.group_by]
+      form.group_by = [...GROUP_OPTIONS]
+    } else {
+      form.group_by = [..._prevGroupBy]
+    }
+  },
 })
 
 // 粒度维度 → 对应的列 key
@@ -521,6 +529,7 @@ function downloadBlob(blob, filename) {
 }
 .field-dialog-toolbar { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; }
 .field-count { color: #909399; font-size: 12px; }
+.group-all :deep(.el-checkbox__label) { font-weight: 600; }
 :deep(.el-card__body) {
   overflow: hidden !important;
 }

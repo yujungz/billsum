@@ -1,6 +1,7 @@
 """Data transfer service - orchestrates remote export, download, import, and fill."""
 
 import asyncio
+import base64
 import os
 import subprocess
 import tarfile
@@ -117,6 +118,103 @@ async def register_log_name(log_name: str, site: str):
     )
 
 
+def _background_export_logs(ssh_cfg, site: str, log_name: str, dump_cmd: str,
+                             max_wait: int = 1800) -> dict:
+    """Run the remote mysqldump DETACHED (nohup) and poll for completion over fresh
+    SSH connections. Survives SSH drops: the dump is not a child of any one session,
+    and each status poll reconnects. Also verifies data presence (INSERT rows > 0).
+
+    Returns an export-result dict. Runs blocking I/O — call via run_in_executor.
+    """
+    sh_dir = f"~/data/{site}"
+    script_path = f"{sh_dir}/.export.sh"
+    sql_file = f"{sh_dir}/{log_name}.sql"
+    done = f"{sh_dir}/.export.done"
+    exitf = f"{sh_dir}/.export.exit"
+    errf = f"{sh_dir}/.export.err"
+
+    # build a remote script (avoids shell-quoting the dump command, which contains
+    # both single and double quotes). Upload via base64 to sidestep all quoting.
+    script = (
+        "#!/bin/bash\n"
+        f"{dump_cmd} 2> {errf}\n"
+        f"echo $? > {exitf}\n"
+        f"touch {done}\n"
+    )
+    b64 = base64.b64encode(script.encode("utf-8")).decode()
+    c, _, e = ssh_service.exec_remote_command(
+        ssh_cfg, f"printf '%s' {b64} | base64 -d > {script_path}", timeout=60)
+    if c != 0:
+        return {"success": False, "step": "export", "error": f"写入远程导出脚本失败: {e}"}
+
+    # clean stale markers, then launch detached
+    ssh_service.exec_remote_command(ssh_cfg, f"rm -f {done} {exitf} {errf}", timeout=60)
+    ssh_service.exec_remote_command(
+        ssh_cfg, f"nohup bash {script_path} >/dev/null 2>&1 &", timeout=60)
+
+    # poll for completion (fresh connection each iteration; reconnect on drop)
+    deadline = time.time() + max_wait
+    finished = False
+    while time.time() < deadline:
+        time.sleep(5)
+        try:
+            c, o, _ = ssh_service.exec_remote_command(
+                ssh_cfg, f"test -f {done} && echo ok", timeout=60)
+            if c == 0 and "ok" in o:
+                finished = True
+                break
+        except Exception as ex:
+            log.warning("poll export status failed (will reconnect & retry): %s", ex)
+    if not finished:
+        return {"success": False, "step": "export", "error": f"远程导出超时（{max_wait}s）"}
+
+    # dump exit code + stderr
+    _, o, _ = ssh_service.exec_remote_command(ssh_cfg, f"cat {exitf} 2>/dev/null", timeout=60)
+    try:
+        dump_exit = int((o or "0").strip().split()[0])
+    except (ValueError, IndexError):
+        dump_exit = -1
+    _, errout, _ = ssh_service.exec_remote_command(ssh_cfg, f"cat {errf} 2>/dev/null", timeout=60)
+    if dump_exit != 0:
+        return {"success": False, "step": "export",
+                "error": f"mysqldump 失败(exit {dump_exit}): {(errout or '').strip()[:300]}"}
+
+    # size check
+    _, o, _ = ssh_service.exec_remote_command(ssh_cfg, f"wc -c {sql_file}", timeout=120)
+    try:
+        size = int(o.strip().split()[0])
+    except (ValueError, IndexError):
+        size = 0
+    if size == 0:
+        return {"success": False, "step": "export", "error": "导出文件为空"}
+
+    # data-presence check: must contain at least one INSERT row
+    _, o, _ = ssh_service.exec_remote_command(
+        ssh_cfg, f"grep -c '^INSERT INTO' {sql_file}", timeout=120)
+    try:
+        inserts = int((o or "0").strip().split()[0])
+    except (ValueError, IndexError):
+        inserts = 0
+    if inserts == 0:
+        return {"success": False, "step": "export",
+                "error": "导出数据为空（0 行 INSERT）。可能是该时间范围内无 type=2 记录，或导出被中断"}
+
+    # sed rename `logs` → `{log_name}orig`
+    sed_cmd = sql_remote_sed_rename(site, log_name)
+    sed_code, _, sed_err = ssh_service.exec_remote_command(ssh_cfg, sed_cmd, timeout=300)
+    if sed_code not in (0, -1):
+        return {"success": False, "step": "export", "error": f"sed rename failed: {sed_err}"}
+
+    # tar
+    tar_file = f"{site}_{log_name}.tgz"
+    ssh_service.exec_remote_command(
+        ssh_cfg,
+        f"cd {sh_dir} && rm -f {tar_file} && tar -czf {tar_file} {log_name}.sql && rm -f {log_name}.sql",
+        timeout=300,
+    )
+    return {"success": True, "step": "export", "log_name": log_name}
+
+
 async def export_remote(site: str, period_type: str, ym: str = "",
                          date_start: str = "", date_end: str = "",
                          tables: list[str] | None = None) -> dict:
@@ -134,9 +232,8 @@ async def export_remote(site: str, period_type: str, ym: str = "",
     # ensure remote directory
     ssh_service.exec_remote_command(ssh_cfg, f"mkdir -p ~/data/{site}")
 
-    # export logs if selected
+    # export logs if selected — detached background dump + poll (survives SSH drops)
     if "logs" in tables:
-        # Step 1: mysqldump → direct redirect to file (no pipe, so data survives SSH drops)
         export_cmd = sql_remote_export(
             site=site,
             container_name=rdb.container_name,
@@ -147,32 +244,12 @@ async def export_remote(site: str, period_type: str, ym: str = "",
             time_end=time_end,
             backup=ssh_cfg.backup,
         )
-        exit_code, out, err = ssh_service.exec_remote_command(
-            ssh_cfg, export_cmd, timeout=600
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            None, _background_export_logs, ssh_cfg, site, log_name, export_cmd
         )
-        if exit_code > 0:
-            return {"success": False, "step": "export", "error": err or out}
-        if exit_code == -1:
-            log.warning(f"SSH connection dropped during export for {site} (exit_code=-1), verifying file...")
-
-        # Step 2: verify file exists and is not empty (uses new SSH connection)
-        ck_code, ck_out, _ = ssh_service.exec_remote_command(
-            ssh_cfg, f"wc -c ~/data/{site}/{log_name}.sql"
-        )
-        if ck_code != 0 or int(ck_out.strip().split()[0]) == 0:
-            return {"success": False, "step": "export", "error": f"导出文件为空，可能是远程数据库连接失败或表不存在"}
-
-        # Step 3: in-place sed to rename `logs` → `{log_name}orig` (separate SSH connection)
-        sed_cmd = sql_remote_sed_rename(site, log_name)
-        sed_code, _, sed_err = ssh_service.exec_remote_command(ssh_cfg, sed_cmd, timeout=300)
-        if sed_code not in (0, -1):
-            return {"success": False, "step": "export", "error": f"sed rename failed: {sed_err}"}
-
-        tar_file = f"{site}_{log_name}.tgz"
-        ssh_service.exec_remote_command(
-            ssh_cfg,
-            f"cd ~/data/{site} && rm -f {tar_file} && tar -czvf {tar_file} {log_name}.sql && rm -f {log_name}.sql",
-        )
+        if not result["success"]:
+            return result
 
     # export selected base tables
     base_tables = [t for t in ["channels", "users", "tokens"] if t in tables]
