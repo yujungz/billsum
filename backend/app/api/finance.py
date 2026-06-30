@@ -120,10 +120,14 @@ async def user_stats(
     username: str = Query(...),
     date_start: str = Query(""),
     date_end: str = Query(""),
+    granularity: str = Query(""),
 ):
     try:
-        monthly = await finance_service.user_monthly(site, table, username, date_start, date_end)
-        daily = await finance_service.user_daily(site, table, username, date_start, date_end)
+        glist = [x.strip() for x in granularity.split(",") if x.strip()] if granularity else []
+        show_model = "model" in glist
+        show_token = "token" in glist
+        monthly = await finance_service.user_monthly(site, table, username, date_start, date_end, show_model)
+        daily = await finance_service.user_daily(site, table, username, date_start, date_end, show_model, show_token)
         return {"monthly": monthly, "daily": daily}
     except Exception as e:
         raise HTTPException(500, detail=str(e))
@@ -180,10 +184,15 @@ async def user_stats_export_async(body: dict):
     date_start = body.get("date_start", "")
     date_end = body.get("date_end", "")
     with_platform = body.get("with_platform", False)
+    with_detail = body.get("with_detail", True)
+    granularity = body.get("granularity", "")
+    glist = [x.strip() for x in granularity.split(",") if x.strip()] if granularity else []
+    show_model = "model" in glist
+    show_token = "token" in glist
     if not site or not table or not username:
         raise HTTPException(400, detail="site, table, username 不能为空")
     task_id = finance_service.start_export_task(
-        site, table, username, date_start, date_end, with_platform
+        site, table, username, date_start, date_end, with_platform, with_detail, show_model, show_token
     )
     return {"task_id": task_id}
 

@@ -191,16 +191,27 @@ async def supplier_query(site: str, table: str, username: str,
 # ── User statistics ──
 
 
+def _user_where(username: str) -> tuple[str, list]:
+    """WHERE fragment + params for username filtering.
+    Empty username → no filter (all users)."""
+    if username:
+        return " AND l.username=%s", [username]
+    return "", []
+
+
 async def user_monthly(site: str, table: str, username: str,
-                       date_start: str, date_end: str) -> list[dict]:
+                       date_start: str, date_end: str,
+                       show_model: bool = False) -> list[dict]:
     config = AppConfig.load()
     db_name = config.db_name(site)
     dw, dp = _date_where(date_start, date_end)
+    uw, up = _user_where(username)
+    extra_sel = ",\n      l.model_name AS `模型名`" if show_model else ""
+    extra_grp = ", l.model_name" if show_model else ""
     sql = f"""
     SELECT
       CONCAT(DATE_FORMAT(FROM_UNIXTIME(l.created_at+28800), '%%m'),'月份') AS `结算周期`,
-      l.username AS `用户名`,
-      l.model_name AS `模型名`,
+      l.username AS `用户名`{extra_sel},
       SUM(l.prompt_tokens)/1000000 AS `输入token(M)`,
       SUM(l.completion_tokens)/1000000 AS `输出token(M)`,
       ROUND(SUM(l.group_ratio*l.model_ratio*2*(l.prompt_tokens
@@ -210,25 +221,32 @@ async def user_monthly(site: str, table: str, username: str,
         +2.00*{_1H_CASE})/1000000), 6) AS `消费额度`,
       SUM(l.quota)*2/1000000 AS `平台额度`
     FROM `{table}` l
-    WHERE l.windup_type < 2
-      AND l.username=%s{dw}
-    GROUP BY CONCAT(DATE_FORMAT(FROM_UNIXTIME(l.created_at+28800), '%%m'),'月份'), l.model_name
+    WHERE l.windup_type < 2{uw}{dw}
+    GROUP BY CONCAT(DATE_FORMAT(FROM_UNIXTIME(l.created_at+28800), '%%m'),'月份'), l.username{extra_grp}
     ORDER BY `结算周期`, `消费额度` DESC
     """
-    return await db.fetch_all(sql, [username] + dp, db=db_name)
+    return await db.fetch_all(sql, up + dp, db=db_name)
 
 
 async def user_daily(site: str, table: str, username: str,
-                     date_start: str, date_end: str) -> list[dict]:
+                     date_start: str, date_end: str,
+                     show_model: bool = False, show_token: bool = False) -> list[dict]:
     config = AppConfig.load()
     db_name = config.db_name(site)
     dw, dp = _date_where(date_start, date_end)
+    uw, up = _user_where(username)
+    extra_sel = ""
+    extra_grp = ""
+    if show_model:
+        extra_sel += ",\n      l.model_name AS `模型名`"
+        extra_grp += ", l.model_name"
+    if show_token:
+        extra_sel += ",\n      l.token_name AS `Token名称`"
+        extra_grp += ", l.token_name"
     sql = f"""
     SELECT
       l.user_id AS `用户ID`,
-      l.username AS `用户名`,
-      l.token_name AS `Token名称`,
-      l.model_name AS `模型名`,
+      l.username AS `用户名`{extra_sel},
       DATE_FORMAT(FROM_UNIXTIME(l.created_at+28800), '%%Y-%%m-%%d') AS `日期`,
       CONCAT(DATE_FORMAT(FROM_UNIXTIME(l.created_at+28800), '%%m'),'月份') AS `结算周期`,
       SUM(l.prompt_tokens)/1000000 AS `输入token(M)`,
@@ -243,15 +261,13 @@ async def user_daily(site: str, table: str, username: str,
         +2.00*{_1H_CASE})/1000000), 6) AS `消费额度`,
       SUM(l.quota)*2/1000000 AS `平台额度`
     FROM `{table}` l
-    WHERE l.windup_type < 2
-      AND l.username=%s{dw}
-    GROUP BY l.user_id, l.username,
+    WHERE l.windup_type < 2{uw}{dw}
+    GROUP BY l.user_id, l.username{extra_grp},
       DATE_FORMAT(FROM_UNIXTIME(l.created_at+28800), '%%Y-%%m-%%d'),
-      CONCAT(DATE_FORMAT(FROM_UNIXTIME(l.created_at+28800), '%%m'),'月份'),
-      l.token_name, l.model_name
+      CONCAT(DATE_FORMAT(FROM_UNIXTIME(l.created_at+28800), '%%m'),'月份')
     ORDER BY `日期` DESC, `消费额度` DESC
     """
-    return await db.fetch_all(sql, [username] + dp, db=db_name)
+    return await db.fetch_all(sql, up + dp, db=db_name)
 
 
 async def user_detail(site: str, table: str, username: str,
@@ -260,11 +276,12 @@ async def user_detail(site: str, table: str, username: str,
     config = AppConfig.load()
     db_name = config.db_name(site)
     dw, dp = _date_where(date_start, date_end)
+    uw, up = _user_where(username)
 
     # Count total
-    count_sql = f"SELECT COUNT(*) as total FROM `{{table}}` l WHERE l.windup_type < 2 AND l.username=%s{{dw}}"
-    count_sql = count_sql.format(table=table, dw=dw)
-    count_row = await db.fetch_one(count_sql, [username] + dp, db=db_name)
+    count_sql = f"SELECT COUNT(*) as total FROM `{{table}}` l WHERE l.windup_type < 2{{uw}}{{dw}}"
+    count_sql = count_sql.format(table=table, uw=uw, dw=dw)
+    count_row = await db.fetch_one(count_sql, up + dp, db=db_name)
     total = count_row["total"] if count_row else 0
 
     # Query page
@@ -307,12 +324,12 @@ async def user_detail(site: str, table: str, username: str,
         +2.00*{_1H_CASE})/1000000, 6) AS `消费额度`,
       l.quota*2/1000000 AS `平台额度`
     FROM `{{table}}` l
-    WHERE l.windup_type < 2 AND l.username=%s{{dw}}
+    WHERE l.windup_type < 2{{uw}}{{dw}}
     ORDER BY l.created_at DESC
     LIMIT %s OFFSET %s
     """
-    sql = sql.format(table=table, dw=dw)
-    rows = await db.fetch_all(sql, [username] + dp + [page_size, offset], db=db_name)
+    sql = sql.format(table=table, uw=uw, dw=dw)
+    rows = await db.fetch_all(sql, up + dp + [page_size, offset], db=db_name)
 
     # Aggregate totals across ALL records (not just current page)
     totals_sql = f"""
@@ -342,10 +359,10 @@ async def user_detail(site: str, table: str, username: str,
         +2.00*{_1H_CASE})/1000000) AS `消费额度`,
       SUM(l.quota*2/1000000) AS `平台额度`
     FROM `{{table}}` l
-    WHERE l.windup_type < 2 AND l.username=%s{{dw}}
+    WHERE l.windup_type < 2{{uw}}{{dw}}
     """
-    totals_sql = totals_sql.format(table=table, dw=dw)
-    totals_row = await db.fetch_one(totals_sql, [username] + dp, db=db_name)
+    totals_sql = totals_sql.format(table=table, uw=uw, dw=dw)
+    totals_row = await db.fetch_one(totals_sql, up + dp, db=db_name)
     totals = {}
     if totals_row:
         for k, v in totals_row.items():
@@ -364,7 +381,8 @@ _MAX_ROWS_PER_SHEET = 1000000
 
 def start_export_task(site: str, table: str, username: str,
                       date_start: str, date_end: str,
-                      with_platform: bool) -> str:
+                      with_platform: bool, with_detail: bool = True,
+                      show_model: bool = False, show_token: bool = False) -> str:
     """Start a background export task, return task_id immediately."""
     task_id = uuid.uuid4().hex[:8]
     _export_tasks[task_id] = {
@@ -384,7 +402,8 @@ def start_export_task(site: str, table: str, username: str,
 
     async def _run():
         try:
-            await _run_export(task_id, site, table, username, date_start, date_end, with_platform)
+            await _run_export(task_id, site, table, username, date_start, date_end,
+                              with_platform, with_detail, show_model, show_token)
         except Exception as e:
             log.exception(f"[export-{task_id}] Failed: {e}")
             _export_tasks[task_id]["status"] = "failed"
@@ -414,7 +433,9 @@ def cleanup_export_task(task_id: str):
 
 
 async def _run_export(task_id: str, site: str, table: str, username: str,
-                      date_start: str, date_end: str, with_platform: bool):
+                      date_start: str, date_end: str, with_platform: bool,
+                      with_detail: bool = True,
+                      show_model: bool = False, show_token: bool = False):
     """Generate xlsx file with streaming writes and multi-sheet splitting."""
     import openpyxl
     from openpyxl.styles import Font, Alignment
@@ -426,13 +447,17 @@ async def _run_export(task_id: str, site: str, table: str, username: str,
 
     # 1. Fetch monthly & daily (small datasets)
     task["progress"] = "查询汇总数据..."
-    monthly = await user_monthly(site, table, username, date_start, date_end)
-    daily = await user_daily(site, table, username, date_start, date_end)
+    monthly = await user_monthly(site, table, username, date_start, date_end, show_model)
+    daily = await user_daily(site, table, username, date_start, date_end, show_model, show_token)
 
-    # 2. Count detail rows
-    count_sql = f"SELECT COUNT(*) AS total FROM `{table}` l WHERE l.windup_type < 2 AND l.username=%s{dw}"
-    count_row = await db.fetch_one(count_sql, [username] + dp, db=db_name)
-    detail_total = count_row["total"] if count_row else 0
+    # 2. Count detail rows (skipped entirely when detail not requested)
+    if not with_detail:
+        detail_total = 0
+    else:
+        uw, up = _user_where(username)
+        count_sql = f"SELECT COUNT(*) AS total FROM `{table}` l WHERE l.windup_type < 2{uw}{dw}"
+        count_row = await db.fetch_one(count_sql, up + dp, db=db_name)
+        detail_total = count_row["total"] if count_row else 0
 
     # 3. Build Excel with write-only workbook
     _PLATFORM_KEYS_SUMMARY = {"平台额度"}
@@ -497,7 +522,7 @@ async def _run_export(task_id: str, site: str, table: str, username: str,
             +2.00*{_1H_CASE})/1000000, 6) AS `消费额度`,
           l.quota*2/1000000 AS `平台额度`
         FROM `{table}` l
-        WHERE l.windup_type < 2 AND l.username=%s{dw}
+        WHERE l.windup_type < 2{uw}{dw}
         ORDER BY l.created_at DESC
         LIMIT %s OFFSET %s
         """
@@ -514,7 +539,7 @@ async def _run_export(task_id: str, site: str, table: str, username: str,
         offset = 0
         while offset < detail_total:
             chunk = await db.fetch_all(
-                detail_sql, [username] + dp + [_CHUNK_SIZE, offset], db=db_name
+                detail_sql, up + dp + [_CHUNK_SIZE, offset], db=db_name
             )
             if not chunk:
                 break

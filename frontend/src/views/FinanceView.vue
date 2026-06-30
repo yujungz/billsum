@@ -64,6 +64,7 @@
               </el-form-item>
               <el-form-item label="用户名">
                 <el-select v-model="userStatsForm.username" filterable placeholder="选择用户名" style="width: 180px">
+                  <el-option label="全部" value="" />
                   <el-option v-for="u in userStatsUsernames" :key="u" :label="u" :value="u" />
                 </el-select>
               </el-form-item>
@@ -75,9 +76,11 @@
               </el-form-item>
               <el-form-item>
                 <el-checkbox v-model="showPlatformQuota" label="平台额度" style="margin-right: 8px" />
+                <el-checkbox v-model="showDetail" label="明细" style="margin-right: 8px" />
+                <el-checkbox v-model="granularity.model" label="模型名" style="margin-right: 8px" />
+                <el-checkbox v-model="granularity.token" label="Token名称" style="margin-right: 8px" />
                 <el-button type="primary" :loading="userStatsLoading" @click="doUserStatsQuery">查询</el-button>
-                <el-checkbox v-model="batchExport" label="批量" style="margin-left: 8px; margin-right: 8px" />
-                <el-button :loading="exportLoading" @click="doUserStatsExport">导出</el-button>
+                <el-button type="primary" :icon="Download" :loading="exportLoading" @click="doUserStatsExport">导出</el-button>
                 <span v-if="exportTimerText" class="export-timer">{{ exportTimerText }}</span>
               </el-form-item>
             </el-form>
@@ -101,7 +104,7 @@
                   </el-table>
                 </div>
               </el-tab-pane>
-              <el-tab-pane label="用户明细" name="detail">
+              <el-tab-pane v-if="showDetail" label="用户明细" name="detail">
                 <div ref="detailTableWrapper" class="table-wrapper sub-table-wrapper">
                   <el-table :data="userStatsDetail" border stripe :height="subTableHeight - 42" v-loading="userStatsLoading"
                     style="width: 100%" show-overflow-tooltip show-summary :summary-method="detailSummary">
@@ -200,6 +203,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+import { Download } from '@element-plus/icons-vue'
 import api from '../api'
 import PaginationBar from '../components/PaginationBar.vue'
 
@@ -292,6 +296,11 @@ onMounted(async () => {
   await loadLogTables()
   await onUserStatsSiteChange()
   await onSrSiteChange()
+  // restore saved user-stats granularity
+  try {
+    const raw = localStorage.getItem(GRANULARITY_KEY)
+    if (raw) Object.assign(granularity, JSON.parse(raw))
+  } catch { /* ignore */ }
   nextTick(() => {
     if (supplierTableWrapper.value) {
       supplierResizeObserver = new ResizeObserver(entries => {
@@ -411,11 +420,25 @@ const userStatsSubTab = ref('monthly')
 
 const showPlatformQuota = ref(false)
 const batchExport = ref(false)
+const showDetail = ref(false)
+const GRANULARITY_KEY = 'billsum_user_stats_granularity'
+const granularity = reactive({ model: false, token: false })
+
+function saveGranularity() {
+  try { localStorage.setItem(GRANULARITY_KEY, JSON.stringify({ ...granularity })) } catch {}
+}
+
+const granularityStr = computed(() => {
+  const parts = []
+  if (granularity.model) parts.push('model')
+  if (granularity.token) parts.push('token')
+  return parts.join(',')
+})
 
 const userStatsForm = reactive({
   site: 'pinova',
   table: '',
-  username: '',
+  username: '',          // '' = 全部
   dateStart: '',
   dateEnd: '',
 })
@@ -440,6 +463,16 @@ function observeSubWrapper() {
 }
 
 watch(userStatsSubTab, () => nextTick(observeSubWrapper))
+
+// 取消「明细」时清空明细数据，并切回月汇总
+watch(showDetail, (v) => {
+  if (!v) {
+    userStatsDetail.value = []
+    userStatsDetailTotal.value = 0
+    userStatsDetailTotals.value = {}
+    if (userStatsSubTab.value === 'detail') userStatsSubTab.value = 'monthly'
+  }
+})
 
 const _platformKeys = ['平台额度']
 
@@ -490,12 +523,14 @@ const userStatsMonthlyCols = computed(() => {
   const cols = [
     { key: '结算周期', label: '结算周期', width: 100 },
     { key: '用户名', label: '用户名', width: 120 },
-    { key: '模型名', label: '模型名', width: 180 },
+  ]
+  if (granularity.model) cols.push({ key: '模型名', label: '模型名', width: 180 })
+  cols.push(
     { key: '输入token(M)', label: '输入token(M)', width: 120, formatter: fmt4 },
     { key: '输出token(M)', label: '输出token(M)', width: 120, formatter: fmt4 },
     { key: '消费额度', label: '消费额度', width: 120, formatter: fmt6 },
     { key: '平台额度', label: '平台额度', width: 120, formatter: fmt6 },
-  ]
+  )
   return showPlatformQuota.value ? cols : cols.filter(c => !_platformKeys.includes(c.key))
 })
 
@@ -503,8 +538,10 @@ const userStatsDailyCols = computed(() => {
   const cols = [
     { key: '用户ID', label: '用户ID', width: 80 },
     { key: '用户名', label: '用户名', width: 100 },
-    { key: 'Token名称', label: 'Token名称', width: 120 },
-    { key: '模型名', label: '模型名', width: 160 },
+  ]
+  if (granularity.token) cols.push({ key: 'Token名称', label: 'Token名称', width: 120 })
+  if (granularity.model) cols.push({ key: '模型名', label: '模型名', width: 160 })
+  cols.push(
     { key: '日期', label: '日期', width: 110 },
     { key: '结算周期', label: '结算周期', width: 100 },
     { key: '输入token(M)', label: '输入token(M)', width: 120, formatter: fmt4 },
@@ -514,7 +551,7 @@ const userStatsDailyCols = computed(() => {
     { key: '读取缓存(M)', label: '读取缓存(M)', width: 130, formatter: fmt4 },
     { key: '消费额度', label: '消费额度', width: 110, formatter: fmt6 },
     { key: '平台额度', label: '平台额度', width: 110, formatter: fmt6 },
-  ]
+  )
   return showPlatformQuota.value ? cols : cols.filter(c => !_platformKeys.includes(c.key))
 })
 
@@ -585,7 +622,6 @@ async function onUserStatsTableChange(table) {
 
 async function doUserStatsQuery() {
   if (!userStatsForm.table) { ElMessage.warning('请选择日志表'); return }
-  if (!userStatsForm.username) { ElMessage.warning('请选择用户名'); return }
 
   userStatsLoading.value = true
   try {
@@ -593,20 +629,24 @@ async function doUserStatsQuery() {
       site: userStatsForm.site,
       table: userStatsForm.table,
       username: userStatsForm.username,
+      granularity: granularityStr.value,
     }
     if (userStatsForm.dateStart) params.date_start = userStatsForm.dateStart
     if (userStatsForm.dateEnd) params.date_end = userStatsForm.dateEnd
     const { data } = await api.finance.userStats(params)
+    saveGranularity()
     userStatsMonthly.value = data.monthly || []
     userStatsDaily.value = data.daily || []
     userStatsDetailTotal.value = 0
     userStatsDetail.value = []
     userStatsDetailTotals.value = {}
-    // Load first page of detail
-    if (userStatsDetailPage.value !== 1) {
-      userStatsDetailPage.value = 1
+    // 仅当勾选「明细」时才加载用户明细
+    if (showDetail.value) {
+      if (userStatsDetailPage.value !== 1) {
+        userStatsDetailPage.value = 1
+      }
+      await loadUserStatsDetail()
     }
-    await loadUserStatsDetail()
   } catch (e) {
     const msg = e.response?.data?.detail || e.message || '查询失败'
     ElMessage.error(msg)
@@ -683,6 +723,7 @@ async function doUserStatsExport() {
         exportLoading.value = false
       }
     }
+    saveGranularity()
   } catch (e) {
     if (e instanceof DOMException && e.name === 'AbortError') return
     ElMessage.error('导出失败: ' + e.message)
@@ -700,6 +741,9 @@ async function _doSingleExport(saveHandle, fileName) {
     date_start: userStatsForm.dateStart || '',
     date_end: userStatsForm.dateEnd || '',
     with_platform: showPlatformQuota.value,
+    with_detail: showDetail.value,
+    granularity: granularityStr.value,
+    granularity: granularityStr.value,
   })
   const taskId = td.task_id
 
@@ -770,6 +814,7 @@ async function _doBatchExport() {
           date_start: userStatsForm.dateStart || '',
           date_end: userStatsForm.dateEnd || '',
           with_platform: showPlatformQuota.value,
+          with_detail: showDetail.value,
         })
         const taskId = td.task_id
 
