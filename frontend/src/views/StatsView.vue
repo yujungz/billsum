@@ -20,23 +20,6 @@
           <el-form-item label="截止日期">
             <el-date-picker v-model="form.date_end" type="date" value-format="YYYY-MM-DD" style="width: 160px" />
           </el-form-item>
-          <el-form-item>
-            <template #label>
-              <el-checkbox v-model="groupAll" class="group-all">统计粒度</el-checkbox>
-            </template>
-            <el-checkbox-group v-model="form.group_by">
-              <el-checkbox value="month">按月</el-checkbox>
-              <el-checkbox value="day">按日</el-checkbox>
-              <el-checkbox value="user">用户</el-checkbox>
-              <el-checkbox value="channel">渠道</el-checkbox>
-              <el-checkbox value="model">模型</el-checkbox>
-              <el-checkbox value="token">Token</el-checkbox>
-              <el-checkbox value="group">分组</el-checkbox>
-              <el-checkbox value="buyer">采购员</el-checkbox>
-              <el-checkbox value="supplier">供应商</el-checkbox>
-              <el-checkbox value="salesperson">销售员</el-checkbox>
-            </el-checkbox-group>
-          </el-form-item>
         </el-form>
 
         <el-form :model="form" label-width="100px" inline>
@@ -77,8 +60,25 @@
                 </el-dropdown-menu>
               </template>
             </el-dropdown>
+            <span v-if="exportTimerText" class="export-timer">{{ exportTimerText }}</span>
           </el-form-item>
         </el-form>
+
+        <div class="granularity-group">
+          <el-checkbox v-model="groupAll" class="group-all">统计粒度</el-checkbox>
+          <el-checkbox-group v-model="form.group_by" class="granularity-cb-group">
+            <el-checkbox value="month">按月</el-checkbox>
+            <el-checkbox value="day">按日</el-checkbox>
+            <el-checkbox value="user">用户</el-checkbox>
+            <el-checkbox value="channel">渠道</el-checkbox>
+            <el-checkbox value="model">模型</el-checkbox>
+            <el-checkbox value="token">Token</el-checkbox>
+            <el-checkbox value="group">分组</el-checkbox>
+            <el-checkbox value="buyer">采购员</el-checkbox>
+            <el-checkbox value="supplier">供应商</el-checkbox>
+            <el-checkbox value="salesperson">销售员</el-checkbox>
+          </el-checkbox-group>
+        </div>
 
         <div ref="tableWrapper" class="table-wrapper">
           <el-table :data="pagedData" border stripe :height="tableHeight" v-loading="loading" style="width: 100%"
@@ -130,6 +130,7 @@ const statsData = ref([])
 const loading = ref(false)
 const page = ref(1)
 const pageSize = ref(parseInt(localStorage.getItem('billsum_page_size')) || 20)
+const exportTimerText = ref('')
 
 const STATS_GROUP_KEY = 'billsum_stats_group_by'
 
@@ -453,6 +454,12 @@ async function doExport(format = 'xlsx') {
           suggestedName: fileName,
           types: [{ description: 'Excel文件', accept: { 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'] } }],
         })
+        // 选择路径完成后才开始计时
+        const t0 = Date.now()
+        exportTimerText.value = '导出中 0.0s'
+        const _timer = setInterval(() => {
+          exportTimerText.value = `导出中 ${((Date.now() - t0) / 1000).toFixed(1)}s`
+        }, 100)
         const resp = await fetch('/api/stats/export', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -467,7 +474,15 @@ async function doExport(format = 'xlsx') {
         await writable.write(blob)
         await writable.close()
         ElMessage.success(`已保存到 ${handle.name}`)
+        exportTimerText.value = `耗时 ${((Date.now() - t0) / 1000).toFixed(1)}s`
+        clearInterval(_timer)
       } else {
+        // 无 save picker，开始计时
+        const t0 = Date.now()
+        exportTimerText.value = '导出中 0.0s'
+        const _timer = setInterval(() => {
+          exportTimerText.value = `导出中 ${((Date.now() - t0) / 1000).toFixed(1)}s`
+        }, 100)
         const resp = await fetch('/api/stats/export', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -480,6 +495,8 @@ async function doExport(format = 'xlsx') {
         const blob = await resp.blob()
         downloadBlob(blob, fileName)
         ElMessage.success('导出完成')
+        exportTimerText.value = `耗时 ${((Date.now() - t0) / 1000).toFixed(1)}s`
+        clearInterval(_timer)
       }
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') return
@@ -487,6 +504,11 @@ async function doExport(format = 'xlsx') {
     }
   } else {
     // CSV: client-side
+    const t0 = Date.now()
+    exportTimerText.value = '导出中 0.0s'
+    const _timer = setInterval(() => {
+      exportTimerText.value = `导出中 ${((Date.now() - t0) / 1000).toFixed(1)}s`
+    }, 100)
     const visibleCols = resultColumns.filter(c => statsData.value.some(r => r[c.key] != null))
     const headers = visibleCols.map(c => c.label)
     const rows = statsData.value.map(r =>
@@ -494,13 +516,14 @@ async function doExport(format = 'xlsx') {
         const v = r[c.key]
         if (v == null) return ''
         if (typeof v !== 'number') return v
-        // Use the column's formatter if available, otherwise toLocaleString
         if (c.formatter) return c.formatter(r, c, v)
         return v.toLocaleString()
       })
     )
     const csv = '﻿' + headers.join(',') + '\n' + rows.map(r => r.join(',')).join('\n')
     downloadBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), `${form.table_name}_stats.csv`)
+    exportTimerText.value = `耗时 ${((Date.now() - t0) / 1000).toFixed(1)}s`
+    clearInterval(_timer)
   }
 }
 
@@ -530,7 +553,20 @@ function downloadBlob(blob, filename) {
 .field-dialog-toolbar { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; }
 .field-count { color: #909399; font-size: 12px; }
 .group-all :deep(.el-checkbox__label) { font-weight: 600; }
+.granularity-group {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  border: 1px solid #dcdfe6; border-radius: 4px;
+  padding: 6px 12px; margin: 6px 0 10px;
+}
+.granularity-cb-group { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 :deep(.el-card__body) {
   overflow: hidden !important;
+}
+.export-timer {
+  display: inline-block;
+  margin-left: 12px;
+  color: #67c23a;
+  font-size: 13px;
+  font-weight: 500;
 }
 </style>

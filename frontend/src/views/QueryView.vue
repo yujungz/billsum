@@ -16,8 +16,8 @@
             </el-radio-group>
           </el-form-item>
           <el-form-item label="表">
-            <el-select v-model="selectedTable" style="width: 280px">
-              <el-option v-for="t in tables" :key="t.name" :label="`${t.name} (${t.rows_count}行)`" :value="t.name" />
+            <el-select v-model="selectedTable" style="width: 380px">
+              <el-option v-for="t in tables" :key="t.name" :label="t.name" :value="t.name" />
             </el-select>
           </el-form-item>
           <el-form-item>

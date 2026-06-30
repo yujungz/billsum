@@ -302,7 +302,8 @@ async function doStep(step) {
   startTimer(step)
   try {
     const { data } = await api.transfer[step](getPayload())
-    addLog(data.step || step, data.success, data.error || data.log_name || '')
+    const countInfo = data.count != null ? `（${data.count} 条记录）` : ''
+    addLog(data.step || step, data.success, data.error || (data.log_name || '') + countInfo)
     stepActive.value = 0
     ElMessage.success((data.step || step) + ' 完成')
     if (data.log_name) refreshLogTableSelector(data.log_name)
@@ -401,7 +402,8 @@ function showResults(results) {
   let newTableName = ''
   for (let i = 0; i < results.length; i++) {
     const r = results[i]
-    addLog(r.step, r.success, r.error || r.log_name || '')
+    const cnt = r.count != null ? `（${r.count} 条记录）` : ''
+    addLog(r.step, r.success, r.error || (r.log_name || '') + cnt)
     stepActive.value = i
     if (r.log_name) newTableName = r.log_name
     if (!r.success) { failed = true; break }

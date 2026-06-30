@@ -77,9 +77,11 @@
               <el-form-item>
                 <el-checkbox v-model="showPlatformQuota" label="平台额度" style="margin-right: 8px" />
                 <el-checkbox v-model="showDetail" label="明细" style="margin-right: 8px" />
-                <span class="granularity-label">统计粒度：</span>
-                <el-checkbox v-model="granularity.model" label="模型名" style="margin-right: 8px" />
-                <el-checkbox v-model="granularity.token" label="Token名称" style="margin-right: 8px" />
+                <span class="granularity-group">
+                  <span class="granularity-group-label">统计粒度：</span>
+                  <el-checkbox v-model="granularity.model" label="模型名" />
+                  <el-checkbox v-model="granularity.token" label="Token名称" />
+                </span>
                 <el-button type="primary" :loading="userStatsLoading" @click="doUserStatsQuery">查询</el-button>
                 <el-button type="primary" :icon="Download" :loading="exportLoading" @click="doUserStatsExport">导出</el-button>
                 <span v-if="exportTimerText" class="export-timer">{{ exportTimerText }}</span>
@@ -1137,6 +1139,11 @@ function downloadBlob(blob, filename) {
   font-size: 13px;
   font-weight: 500;
 }
-.granularity-label { color: #606266; font-size: 13px; margin-right: 4px; white-space: nowrap; }
+.granularity-group {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 4px 10px; border: 1px solid #dcdfe6; border-radius: 4px;
+  margin-right: 8px;
+}
+.granularity-group-label { color: #606266; font-size: 13px; white-space: nowrap; }
 :deep(.el-card__body) { overflow: hidden !important; }
 </style>

@@ -119,6 +119,7 @@ async def register_log_name(log_name: str, site: str):
 
 
 def _background_export_logs(ssh_cfg, site: str, log_name: str, dump_cmd: str,
+                             rdb=None, time_begin=None, time_end=None,
                              max_wait: int = 1800) -> dict:
     """Run the remote mysqldump DETACHED (nohup) and poll for completion over fresh
     SSH connections. Survives SSH drops: the dump is not a child of any one session,
@@ -212,7 +213,24 @@ def _background_export_logs(ssh_cfg, site: str, log_name: str, dump_cmd: str,
         f"cd {sh_dir} && rm -f {tar_file} && tar -czf {tar_file} {log_name}.sql && rm -f {log_name}.sql",
         timeout=300,
     )
-    return {"success": True, "step": "export", "log_name": log_name}
+
+    # Query actual row count for the success log
+    row_count = 0
+    if rdb and time_begin and time_end:
+        try:
+            tbl_exp = rf"\`{rdb.db_name}\`.logs"
+            cc = (
+                f"docker exec {rdb.container_name} mysql -uroot -p{rdb.password} -N "
+                f"-e \"SELECT COUNT(*) FROM {tbl_exp} WHERE type=2 "
+                f"AND created_at+28800 BETWEEN UNIX_TIMESTAMP('{time_begin}') "
+                f"AND UNIX_TIMESTAMP('{time_end}')\""
+            )
+            c, out, _ = ssh_service.exec_remote_command(ssh_cfg, cc, timeout=120)
+            if c == 0:
+                row_count = int(out.strip())
+        except Exception:
+            pass
+    return {"success": True, "step": "export", "log_name": log_name, "count": row_count}
 
 
 async def export_remote(site: str, period_type: str, ym: str = "",
@@ -269,7 +287,8 @@ async def export_remote(site: str, period_type: str, ym: str = "",
         )
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(
-            None, _background_export_logs, ssh_cfg, site, log_name, export_cmd
+            None, _background_export_logs, ssh_cfg, site, log_name, export_cmd,
+            rdb, time_begin, time_end
         )
         if not result["success"]:
             return result

@@ -94,19 +94,15 @@ async def query_table(site: str, table_name: str, page: int = 1,
         if conditions:
             where = "WHERE " + " AND ".join(conditions)
 
-    # count - use fast estimate when no filters, exact COUNT when filtered
-    if where:
-        count_row = await db.fetch_one(
-            f"SELECT COUNT(*) as total FROM `{table_name}` {where}", params, db=db_name
-        )
+    # count - always use exact COUNT(*) (not estimated TABLE_ROWS)
+    try:
+        sql_count = f"SELECT COUNT(*) as total FROM `{table_name}`"
+        if where:
+            sql_count += f" {where}"
+        count_row = await db.fetch_one(sql_count, params if where else None, db=db_name)
         total = count_row["total"] if count_row else 0
-    else:
-        count_row = await db.fetch_one(
-            "SELECT TABLE_ROWS as total FROM information_schema.TABLES "
-            "WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s",
-            (db_name, table_name), db=db_name,
-        )
-        total = count_row["total"] if count_row else 0
+    except Exception:
+        total = 0
 
     # data - use created_at order for logs tables, id order for others
     is_logs = table_name.startswith("logs")
