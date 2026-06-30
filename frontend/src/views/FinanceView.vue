@@ -77,6 +77,7 @@
               <el-form-item>
                 <el-checkbox v-model="showPlatformQuota" label="平台额度" style="margin-right: 8px" />
                 <el-checkbox v-model="showDetail" label="明细" style="margin-right: 8px" />
+                <span class="granularity-label">统计粒度：</span>
                 <el-checkbox v-model="granularity.model" label="模型名" style="margin-right: 8px" />
                 <el-checkbox v-model="granularity.token" label="Token名称" style="margin-right: 8px" />
                 <el-button type="primary" :loading="userStatsLoading" @click="doUserStatsQuery">查询</el-button>
@@ -1136,5 +1137,6 @@ function downloadBlob(blob, filename) {
   font-size: 13px;
   font-weight: 500;
 }
+.granularity-label { color: #606266; font-size: 13px; margin-right: 4px; white-space: nowrap; }
 :deep(.el-card__body) { overflow: hidden !important; }
 </style>
