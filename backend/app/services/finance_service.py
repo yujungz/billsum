@@ -382,7 +382,8 @@ _MAX_ROWS_PER_SHEET = 1000000
 def start_export_task(site: str, table: str, username: str,
                       date_start: str, date_end: str,
                       with_platform: bool, with_detail: bool = True,
-                      show_model: bool = False, show_token: bool = False) -> str:
+                      show_model: bool = False, show_token: bool = False,
+                      with_total_cost: bool = True) -> str:
     """Start a background export task, return task_id immediately."""
     task_id = uuid.uuid4().hex[:8]
     _export_tasks[task_id] = {
@@ -403,7 +404,8 @@ def start_export_task(site: str, table: str, username: str,
     async def _run():
         try:
             await _run_export(task_id, site, table, username, date_start, date_end,
-                              with_platform, with_detail, show_model, show_token)
+                              with_platform, with_detail, show_model, show_token,
+                              with_total_cost)
         except Exception as e:
             log.exception(f"[export-{task_id}] Failed: {e}")
             _export_tasks[task_id]["status"] = "failed"
@@ -435,7 +437,8 @@ def cleanup_export_task(task_id: str):
 async def _run_export(task_id: str, site: str, table: str, username: str,
                       date_start: str, date_end: str, with_platform: bool,
                       with_detail: bool = True,
-                      show_model: bool = False, show_token: bool = False):
+                      show_model: bool = False, show_token: bool = False,
+                      with_total_cost: bool = True):
     """Generate xlsx file with streaming writes and multi-sheet splitting."""
     import openpyxl
     from openpyxl.styles import Font, Alignment
@@ -460,13 +463,16 @@ async def _run_export(task_id: str, site: str, table: str, username: str,
         detail_total = count_row["total"] if count_row else 0
 
     # 3. Build Excel with write-only workbook
-    _PLATFORM_KEYS_SUMMARY = {"平台额度"}
+    _PLATFORM_KEYS = {"平台额度"}
     if not with_platform:
-        monthly = _strip_platform(monthly, _PLATFORM_KEYS_SUMMARY)
-        daily = _strip_platform(daily, _PLATFORM_KEYS_SUMMARY)
+        monthly = _strip_platform(monthly, _PLATFORM_KEYS)
+        daily = _strip_platform(daily, _PLATFORM_KEYS)
+    if not with_total_cost:
+        monthly = _strip_platform(monthly, {"消费额度"})
+        daily = _strip_platform(daily, {"消费额度"})
 
-    total_summary = ["消费额度"] + (["平台额度"] if with_platform else [])
-    total_detail_fields = ["消费额度"] + (["平台额度"] if with_platform else [])
+    total_summary = (["消费额度"] if with_total_cost else []) + (["平台额度"] if with_platform else [])
+    total_detail_fields = (["消费额度"] if with_total_cost else []) + (["平台额度"] if with_platform else [])
 
     wb = openpyxl.Workbook(write_only=True)
 

@@ -185,6 +185,7 @@ async def user_stats_export_async(body: dict):
     date_end = body.get("date_end", "")
     with_platform = body.get("with_platform", False)
     with_detail = body.get("with_detail", True)
+    with_total_cost = body.get("with_total_cost", True)
     granularity = body.get("granularity", "")
     glist = [x.strip() for x in granularity.split(",") if x.strip()] if granularity else []
     show_model = "model" in glist
@@ -192,7 +193,7 @@ async def user_stats_export_async(body: dict):
     if not site or not table:
         raise HTTPException(400, detail="site, table 不能为空")
     task_id = finance_service.start_export_task(
-        site, table, username, date_start, date_end, with_platform, with_detail, show_model, show_token
+        site, table, username, date_start, date_end, with_platform, with_detail, show_model, show_token, with_total_cost
     )
     return {"task_id": task_id}
 

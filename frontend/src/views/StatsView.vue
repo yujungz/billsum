@@ -41,7 +41,7 @@
           <el-form-item label="销售员">
             <el-input v-model="form.filters.us_salesperson" placeholder="筛选销售员" clearable style="width: 150px" />
           </el-form-item>
-          <el-form-item label="0费用">
+          <el-form-item label="0费用" class="zero-fee-group">
             <el-radio-group v-model="form.show_zero">
               <el-radio :value="true">显示</el-radio>
               <el-radio :value="false">隐藏</el-radio>
@@ -49,9 +49,11 @@
           </el-form-item>
           <el-form-item>
             <el-checkbox v-model="form.desc_order" label="倒序" style="margin-right: 8px" />
-            <el-button type="info" plain :icon="Operation" @click="openStatsFieldDialog">字段选择</el-button>
+            <el-checkbox v-model="showChannelName" label="渠道名称" style="margin-right: 8px" />
+            <el-button type="primary" plain :icon="Operation" @click="openStatsFieldDialog">字段选择</el-button>
             <el-button type="primary" :loading="loading" @click="doQuery">查询</el-button>
-            <el-dropdown split-button @click="doExport('xlsx')" @command="doExport">
+            <el-checkbox v-model="showLogDetail" label="日志明细" style="margin-left: 16px; margin-right: 8px" />
+            <el-dropdown split-button type="success" :loading="exportLoading" @click="doExport('xlsx')" @command="doExport">
               导出 Excel
               <template #dropdown>
                 <el-dropdown-menu>
@@ -128,9 +130,19 @@ const sites = ['ai', 'csp', 'pinova', 'wzg', 'qn', 'digitalcloud']
 const logTables = ref([])
 const statsData = ref([])
 const loading = ref(false)
+const exportLoading = ref(false)
 const page = ref(1)
 const pageSize = ref(parseInt(localStorage.getItem('billsum_page_size')) || 20)
 const exportTimerText = ref('')
+const showChannelName = ref(false)
+const showLogDetail = ref(false)
+
+const exportFields = computed(() => {
+  if (!allColumns.length) return []
+  return allColumns
+    .filter(c => SELECTABLE_COL_KEYS.has(c.key) && statsFieldConfig[c.key] !== false)
+    .map(c => ({ name: c.key, label: c.label }))
+})
 
 const STATS_GROUP_KEY = 'billsum_stats_group_by'
 
@@ -443,64 +455,83 @@ async function doExport(format = 'xlsx') {
     group_by: form.group_by,
     filters: Object.keys(filters).length ? filters : null,
     show_zero: form.show_zero,
+    show_channel_name: showChannelName.value,
+    fields: JSON.stringify(exportFields.value),
   }
 
   if (format === 'xlsx') {
-    // Backend generates real xlsx via openpyxl
-    const fileName = `${form.site}_${form.table_name}_stats.xlsx`
+    exportLoading.value = true
+    const fnSum = `${form.site}_${form.table_name}_sum.xlsx`
+    const fnDetail = `${form.site}_${form.table_name}_明细.xlsx`
     try {
-      if (window.showSaveFilePicker) {
-        const handle = await window.showSaveFilePicker({
-          suggestedName: fileName,
-          types: [{ description: 'Excel文件', accept: { 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'] } }],
-        })
-        // 选择路径完成后才开始计时
-        const t0 = Date.now()
-        exportTimerText.value = '导出中 0.0s'
-        const _timer = setInterval(() => {
-          exportTimerText.value = `导出中 ${((Date.now() - t0) / 1000).toFixed(1)}s`
-        }, 100)
-        const resp = await fetch('/api/stats/export', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        })
-        if (!resp.ok) {
-          const err = await resp.json().catch(() => ({ detail: resp.statusText }))
-          throw new Error(err.detail || '导出失败')
-        }
-        const blob = await resp.blob()
-        const writable = await handle.createWritable()
-        await writable.write(blob)
-        await writable.close()
-        ElMessage.success(`已保存到 ${handle.name}`)
-        exportTimerText.value = `耗时 ${((Date.now() - t0) / 1000).toFixed(1)}s`
-        clearInterval(_timer)
+      // 选择目录路径
+      let dirHandle
+      const supportsDir = typeof window.showDirectoryPicker === 'function'
+      if (supportsDir) {
+        dirHandle = await window.showDirectoryPicker()
       } else {
-        // 无 save picker，开始计时
+        // 不支持目录选择器→ 直接下载
         const t0 = Date.now()
         exportTimerText.value = '导出中 0.0s'
         const _timer = setInterval(() => {
           exportTimerText.value = `导出中 ${((Date.now() - t0) / 1000).toFixed(1)}s`
         }, 100)
         const resp = await fetch('/api/stats/export', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
         })
-        if (!resp.ok) {
-          const err = await resp.json().catch(() => ({ detail: resp.statusText }))
-          throw new Error(err.detail || '导出失败')
+        if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).detail || '导出失败')
+        downloadBlob(await resp.blob(), fnSum)
+        if (showLogDetail.value) {
+          exportTimerText.value = `正在导出明细...`
+          const d = await fetch('/api/stats/export-detail', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+          })
+          if (!d.ok) throw new Error((await d.json().catch(() => ({}))).detail || '明细导出失败')
+          downloadBlob(await d.blob(), fnDetail)
         }
-        const blob = await resp.blob()
-        downloadBlob(blob, fileName)
-        ElMessage.success('导出完成')
         exportTimerText.value = `耗时 ${((Date.now() - t0) / 1000).toFixed(1)}s`
         clearInterval(_timer)
+        return
       }
+
+      // 选择目录完成 → 开始计时
+      const t0 = Date.now()
+      const _timer = setInterval(() => {
+        exportTimerText.value = `导出中 ${((Date.now() - t0) / 1000).toFixed(1)}s`
+      }, 100)
+
+      // 1. 统计文件
+      exportTimerText.value = `正在导出 ${fnSum} ...`
+      const r1 = await fetch('/api/stats/export', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      })
+      if (!r1.ok) throw new Error((await r1.json().catch(() => ({}))).detail || '导出失败')
+      const fh1 = await dirHandle.getFileHandle(fnSum, { create: true })
+      const w1 = await fh1.createWritable()
+      await w1.write(await r1.blob())
+      await w1.close()
+
+      // 2. 明细文件（可选）
+      if (showLogDetail.value) {
+        exportTimerText.value = `正在导出 ${fnDetail} ...`
+        const r2 = await fetch('/api/stats/export-detail', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+        })
+        if (!r2.ok) throw new Error((await r2.json().catch(() => ({}))).detail || '明细导出失败')
+        const fh2 = await dirHandle.getFileHandle(fnDetail, { create: true })
+        const w2 = await fh2.createWritable()
+        await w2.write(await r2.blob())
+        await w2.close()
+      }
+
+      clearInterval(_timer)
+      exportTimerText.value = `耗时 ${((Date.now() - t0) / 1000).toFixed(1)}s`
+      ElMessage.success('全部导出完成')
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') return
       ElMessage.error('导出失败: ' + e.message)
+    } finally {
+      exportLoading.value = false
     }
   } else {
     // CSV: client-side
@@ -521,7 +552,7 @@ async function doExport(format = 'xlsx') {
       })
     )
     const csv = '﻿' + headers.join(',') + '\n' + rows.map(r => r.join(',')).join('\n')
-    downloadBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), `${form.table_name}_stats.csv`)
+    downloadBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), `${form.table_name}_sum.csv`)
     exportTimerText.value = `耗时 ${((Date.now() - t0) / 1000).toFixed(1)}s`
     clearInterval(_timer)
   }
@@ -553,6 +584,7 @@ function downloadBlob(blob, filename) {
 .field-dialog-toolbar { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; }
 .field-count { color: #909399; font-size: 12px; }
 .group-all :deep(.el-checkbox__label) { font-weight: 600; }
+.zero-fee-group { border: 1px solid #dcdfe6; border-radius: 4px; padding: 0 10px; }
 .granularity-group {
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
   border: 1px solid #dcdfe6; border-radius: 4px;

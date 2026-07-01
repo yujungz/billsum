@@ -76,13 +76,15 @@
               </el-form-item>
               <el-form-item>
                 <el-checkbox v-model="showPlatformQuota" label="平台额度" style="margin-right: 8px" />
-                <el-checkbox v-model="showDetail" label="明细" style="margin-right: 8px" />
+                <el-checkbox v-model="showTotalCost" label="消费额度" style="margin-right: 8px" />
+                <el-checkbox v-model="showDetail" label="用户明细" style="margin-right: 8px" />
                 <span class="granularity-group">
                   <span class="granularity-group-label">统计粒度：</span>
                   <el-checkbox v-model="granularity.model" label="模型名" />
                   <el-checkbox v-model="granularity.token" label="Token名称" />
                 </span>
                 <el-button type="primary" :loading="userStatsLoading" @click="doUserStatsQuery">查询</el-button>
+                <el-checkbox v-if="!userStatsForm.username" v-model="mergeExport" label="合并" style="margin-left: 20px; margin-right: 8px" />
                 <el-button type="primary" :icon="Download" :loading="exportLoading" @click="doUserStatsExport">导出</el-button>
                 <span v-if="exportTimerText" class="export-timer">{{ exportTimerText }}</span>
               </el-form-item>
@@ -421,9 +423,11 @@ const userStatsDetailPageSize = ref(parseInt(localStorage.getItem('billsum_page_
 const userStatsLoading = ref(false)
 const userStatsSubTab = ref('monthly')
 
-const showPlatformQuota = ref(false)
+const showTotalCost = ref(false)
+const showPlatformQuota = ref(true)
 const batchExport = ref(false)
 const showDetail = ref(false)
+const mergeExport = ref(false)
 const GRANULARITY_KEY = 'billsum_user_stats_granularity'
 const granularity = reactive({ model: false, token: false })
 
@@ -531,10 +535,10 @@ const userStatsMonthlyCols = computed(() => {
   cols.push(
     { key: '输入token(M)', label: '输入token(M)', width: 120, formatter: fmt4 },
     { key: '输出token(M)', label: '输出token(M)', width: 120, formatter: fmt4 },
-    { key: '消费额度', label: '消费额度', width: 120, formatter: fmt6 },
-    { key: '平台额度', label: '平台额度', width: 120, formatter: fmt6 },
   )
-  return showPlatformQuota.value ? cols : cols.filter(c => !_platformKeys.includes(c.key))
+  if (showTotalCost.value) cols.push({ key: '消费额度', label: '消费额度', width: 120, formatter: fmt6 })
+  if (showPlatformQuota.value) cols.push({ key: '平台额度', label: '平台额度', width: 120, formatter: fmt6 })
+  return cols
 })
 
 const userStatsDailyCols = computed(() => {
@@ -552,10 +556,10 @@ const userStatsDailyCols = computed(() => {
     { key: '创建缓存5M(M)', label: '创建缓存5M(M)', width: 140, formatter: fmt4 },
     { key: '创建缓存1H(M)', label: '创建缓存1H(M)', width: 140, formatter: fmt4 },
     { key: '读取缓存(M)', label: '读取缓存(M)', width: 130, formatter: fmt4 },
-    { key: '消费额度', label: '消费额度', width: 110, formatter: fmt6 },
-    { key: '平台额度', label: '平台额度', width: 110, formatter: fmt6 },
   )
-  return showPlatformQuota.value ? cols : cols.filter(c => !_platformKeys.includes(c.key))
+  if (showTotalCost.value) cols.push({ key: '消费额度', label: '消费额度', width: 110, formatter: fmt6 })
+  if (showPlatformQuota.value) cols.push({ key: '平台额度', label: '平台额度', width: 110, formatter: fmt6 })
+  return cols
 })
 
 const userStatsDetailCols = computed(() => {
@@ -586,10 +590,10 @@ const userStatsDetailCols = computed(() => {
     { key: '缓存总token', label: '缓存总token', width: 110, formatter: fmtInt },
     { key: '缓存总费用', label: '缓存总费用', width: 100, formatter: fmt6 },
     { key: '总消耗token', label: '总消耗token', width: 110, formatter: fmtInt },
-    { key: '消费额度', label: '消费额度', width: 100, formatter: fmt6 },
-    { key: '平台额度', label: '平台额度', width: 100, formatter: fmt6 },
   ]
-  return showPlatformQuota.value ? cols : cols.filter(c => !_platformKeys.includes(c.key))
+  if (showTotalCost.value) cols.push({ key: '消费额度', label: '消费额度', width: 100, formatter: fmt6 })
+  if (showPlatformQuota.value) cols.push({ key: '平台额度', label: '平台额度', width: 100, formatter: fmt6 })
+  return cols
 })
 
 async function onUserStatsSiteChange() {
@@ -659,7 +663,7 @@ async function doUserStatsQuery() {
 }
 
 async function loadUserStatsDetail() {
-  if (!userStatsForm.table || !userStatsForm.username) return
+  if (!userStatsForm.table) return
   userStatsLoading.value = true
   try {
     const params = {
@@ -683,12 +687,13 @@ async function loadUserStatsDetail() {
 }
 
 async function doUserStatsExport() {
-  if (!batchExport.value && !userStatsMonthly.value.length && !userStatsDaily.value.length && !userStatsDetailTotal.value) {
+  const isBatch = !userStatsForm.username && !mergeExport.value   // 全部+合并→单文件；全部+非合并→按用户
+  if (!isBatch && !userStatsMonthly.value.length && !userStatsDaily.value.length && !userStatsDetailTotal.value) {
     ElMessage.warning('没有数据可导出，请先查询')
     return
   }
   try {
-    if (batchExport.value) {
+    if (isBatch) {
       exportLoading.value = true
       const t0 = startTimer()
       try {
@@ -745,7 +750,7 @@ async function _doSingleExport(saveHandle, fileName) {
     date_end: userStatsForm.dateEnd || '',
     with_platform: showPlatformQuota.value,
     with_detail: showDetail.value,
-    granularity: granularityStr.value,
+    with_total_cost: showTotalCost.value,
     granularity: granularityStr.value,
   })
   const taskId = td.task_id
@@ -818,6 +823,8 @@ async function _doBatchExport() {
           date_end: userStatsForm.dateEnd || '',
           with_platform: showPlatformQuota.value,
           with_detail: showDetail.value,
+          with_total_cost: showTotalCost.value,
+          granularity: granularityStr.value,
         })
         const taskId = td.task_id
 

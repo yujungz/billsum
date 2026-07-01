@@ -59,6 +59,8 @@ export default {
     },
     deleteTable: (site, table) => api.delete('/query/table', { params: { site, table } }),
     importTable: (site, table, formData) => api.post('/query/import', formData, { params: { site, table }, headers: { 'Content-Type': 'multipart/form-data' } }),
+    // 数据统计
+    statsExportDetail: (data) => api.post('/stats/export-detail', data, { responseType: 'blob' }),
   },
   // Stats
   stats: {
