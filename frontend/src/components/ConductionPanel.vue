@@ -36,6 +36,7 @@
       <el-checkbox v-model="addNew" :disabled="isDefaultSelected">新增</el-checkbox>
       <el-button type="primary" :loading="saving" @click="saveConfig">保存配置</el-button>
       <el-button :loading="resetting" @click="resetConfig">重置配置</el-button>
+      <el-checkbox v-model="skipImport" :disabled="running" style="margin-left: 8px">导入目的库</el-checkbox>
       <el-button type="danger" :disabled="running" :loading="starting" @click="startTransfer">开始传导</el-button>
       <el-button v-if="taskDone && hasTgz" type="primary" :icon="Download" plain @click="downloadTgz">下载 {{ downloadName }}</el-button>
     </el-space>
@@ -118,6 +119,7 @@ const taskId = ref(null)
 const hasTgz = ref(false)
 const downloadName = ref('')
 const taskDone = ref(false)
+const skipImport = ref(false)
 const logs = ref([])
 const elapsed = ref(0)
 const timerRunning = ref(false)
@@ -219,11 +221,13 @@ async function refreshSourceTables() {
 }
 
 async function openTableDialog() {
+  if (running.value) { running.value = false; stopTimer() }
   if (!sourceTables.value.length) await refreshSourceTables()
   tableDialog.value = true
 }
 
 async function saveConfig() {
+  if (running.value) { running.value = false; stopTimer() }
   saving.value = true
   try {
     const src = JSON.parse(JSON.stringify(config.source))
@@ -264,6 +268,7 @@ async function resetConfig() {
     await ElMessageBox.confirm('确定放弃当前未保存的修改，恢复到最后保存的配置？', '重置配置',
       { confirmButtonText: '重置', cancelButtonText: '取消', type: 'warning' })
   } catch { return }
+  if (running.value) { running.value = false; stopTimer() }
   resetting.value = true
   try {
     selectedName.value = ''   // force loadServerConfig to pick the server-side selected group
@@ -292,7 +297,7 @@ async function startTransfer() {
   downloadName.value = ''
   startTimer()
   try {
-    const { data } = await api.conduction.start({ source: config.source, destination: config.destination })
+    const { data } = await api.conduction.start({ source: config.source, destination: config.destination, skip_import: skipImport.value })
     taskId.value = data.task_id
     starting.value = false
     pollTask(data.task_id)
@@ -320,7 +325,15 @@ function pollTask(id) {
         const failed = (data.logs || []).some(l => !l.success)
         failed ? ElMessage.error('传导结束（含失败步骤，请查看日志）') : ElMessage.success('数据传导完成')
       }
-    } catch { /* keep polling */ }
+    } catch (e) {
+      // 任务不存在（服务端重启等）→ 停止轮询、释放按钮
+      if (e?.response?.status === 404) {
+        clearInterval(pollTimer); pollTimer = null
+        running.value = false
+        stopTimer()
+        taskId.value = null
+      }
+    }
   }, 2500)
 }
 

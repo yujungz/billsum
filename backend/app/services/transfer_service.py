@@ -445,7 +445,7 @@ async def fill_local(site: str, log_name: str) -> dict:
             if idx_name and tbl_name and not await _index_exists(tbl_name, idx_name, db_name):
                 await db.execute(stmt, db=db_name)
 
-        # uptnew: fill sales/buyer info
+        # uptnew: fill sales/buyer info (skip ex_ tables gracefully if missing)
         stmts = sql_uptnew(log_name, mode=site_cfg.uptnew_mode)
         for stmt in stmts:
             if stmt.startswith("CREATE INDEX"):
@@ -454,7 +454,15 @@ async def fill_local(site: str, log_name: str) -> dict:
                 tbl_name = parts[3] if len(parts) >= 4 else ""
                 if idx_name and tbl_name and await _index_exists(tbl_name, idx_name, db_name):
                     continue
-            await db.execute(stmt, db=db_name)
+            try:
+                await db.execute(stmt, db=db_name)
+            except Exception as ex:
+                err_str = str(ex)
+                # 1146 = table not found; common when ex_users/ex_tokens/ex_channels don't exist
+                if "1146" in err_str:
+                    log.warning("skip uptnew step (ex_ table missing): %s — %s", stmt[:60], err_str[:100])
+                else:
+                    raise
 
         # fill_expr_pricing: apply expr_b64-based pricing for rows that have it
         await fill_expr_pricing(site, log_name)

@@ -18,6 +18,7 @@ router = APIRouter(prefix="/api/conduction", tags=["conduction"])
 class StartRequest(BaseModel):
     source: CondEndpoint
     destination: CondEndpoint
+    skip_import: bool = False
 
 
 @router.get("/config")
@@ -60,7 +61,7 @@ async def start(req: StartRequest):
     src = req.source
     if not src.all_checked and not src.selected_tables:
         raise HTTPException(400, detail="请至少选择一张表，或勾选「全部」按整库备份")
-    task_id = conduction_service.start_task(src, req.destination)
+    task_id = conduction_service.start_task(src, req.destination, req.skip_import)
     return {"task_id": task_id}
 
 

@@ -123,7 +123,7 @@ import { Operation } from '@element-plus/icons-vue'
 import api from '../api'
 import PaginationBar from '../components/PaginationBar.vue'
 
-const sites = ['ai', 'csp', 'pinova', 'wzg', 'qn', 'digitalcloud']
+const sites = ['ai', 'csp', 'pinova', 'wzg', 'qn', 'digitalcloud', 'wshk']
 const site = ref('pinova')
 const tableType = ref('output')
 const tables = ref([])

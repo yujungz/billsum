@@ -112,7 +112,7 @@ import { ref, reactive, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import api from '../api'
 
-const sites = ['ai', 'csp', 'pinova', 'wzg', 'qn', 'digitalcloud']
+const sites = ['ai', 'csp', 'pinova', 'wzg', 'qn', 'digitalcloud', 'wshk']
 const activeTab = ref('mysql')
 const activeSite = ref('wzg')
 const fileInputs = ref([])
@@ -129,6 +129,7 @@ const SITE_DEFAULTS = {
   wzg: { ssh: { host: 'shadow.burncloud.com', user: 'root', key_path: KEY_PATH_DEFAULT }, remote_db: { container_name: 'backup_48.211.172.173-wzg', db_name: 'new-api', password: SSH_DEFAULT }, uptnew_mode: 'full' },
   qn: { ssh: { host: '120.26.136.61', user: 'root', key_path: KEY_PATH_DEFAULT }, remote_db: { container_name: 'burncloud-mysql', db_name: 'new-api', password: 'abc123' }, uptnew_mode: 'minimal' },
   digitalcloud: { ssh: { host: 'shadow.burncloud.com', user: 'root', key_path: KEY_PATH_DEFAULT }, remote_db: { container_name: 'backup_198.11.182.119-digitalcloud', db_name: 'new-api', password: 'abc123' }, uptnew_mode: 'minimal' },
+  wshk: { ssh: { host: 'wshk.burncloud.com', user: 'root', key_path: KEY_PATH_DEFAULT }, remote_db: { container_name: 'main01-mysql', db_name: 'new-api', password: 'burncloud123456qwe' }, uptnew_mode: 'full' },
 }
 
 const config = reactive({

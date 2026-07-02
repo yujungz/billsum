@@ -82,6 +82,7 @@ def _build_detail_columns(show_channel_name: bool, fields_json: str) -> list[dic
     cols.append({"key": "created_at", "label": "时间戳"})
     cols.append({"key": "created_date", "label": "创建日期"})
     # user fields
+    cols.append({"key": "user_id", "label": "用户ID"})
     cols.append({"key": "username", "label": "用户"})
     cols.append({"key": "channel_id", "label": "渠道标识"})
     if show_channel_name:
@@ -123,6 +124,7 @@ _DETAIL_FIXED_SQL = {
     "id": "l.id",
     "created_at": "l.created_at",
     "created_date": "FROM_UNIXTIME(l.created_at+28800)",
+    "user_id": "l.user_id",
     "username": "l.username",
     "channel_id": "l.channel_id",
     "channel_name": "l.channel_name",

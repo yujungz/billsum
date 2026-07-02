@@ -108,7 +108,7 @@ import ConductionPanel from '../components/ConductionPanel.vue'
 
 const STATE_KEY = 'billsum_transfer_state'
 
-const sites = ['ai', 'csp', 'pinova', 'wzg', 'qn', 'digitalcloud']
+const sites = ['ai', 'csp', 'pinova', 'wzg', 'qn', 'digitalcloud', 'wshk']
 const activeTab = ref('transfer')
 
 // ── Persistent state ──

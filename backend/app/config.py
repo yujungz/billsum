@@ -8,7 +8,7 @@ from pydantic import BaseModel
 DATA_DIR = Path(os.getenv("DATA_DIR", "/app/data"))
 CONFIG_FILE = DATA_DIR / "config.json"
 
-SITES = ["ai", "csp", "pinova", "wzg", "qn", "digitalcloud"]
+SITES = ["ai", "csp", "pinova", "wzg", "qn", "digitalcloud", "wshk"]
 
 DEFAULT_SSH_HOST = "shadow.burncloud.com"
 DEFAULT_REMOTE_PASSWORD = "burncloud123456!qwf"
@@ -44,6 +44,11 @@ SITE_DEFAULTS = {
         "ssh": {"host": DEFAULT_SSH_HOST, "user": "root", "key_path": DEFAULT_KEY_PATH},
         "remote_db": {"container_name": "backup_198.11.182.119-digitalcloud", "db_name": "new-api", "password": "abc123"},
         "uptnew_mode": "minimal",
+    },
+    "wshk": {
+        "ssh": {"host": "wshk.burncloud.com", "user": "root", "key_path": DEFAULT_KEY_PATH},
+        "remote_db": {"container_name": "main01-mysql", "db_name": "new-api", "password": "burncloud123456qwe"},
+        "uptnew_mode": "full",
     },
 }
 
@@ -106,6 +111,16 @@ class AppConfig(BaseModel):
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
             cfg = cls(**data)
+            # merge any missing sites (e.g. newly added code sites) into saved config
+            for site in SITES:
+                if site not in cfg.sites:
+                    d = SITE_DEFAULTS.get(site, {})
+                    cfg.sites[site] = SiteConfig(
+                        name=site,
+                        ssh=SSHRemoteConfig(**d.get("ssh", {})),
+                        remote_db=RemoteDBConfig(**d.get("remote_db", {})),
+                        uptnew_mode=d.get("uptnew_mode", "full"),
+                    )
             cls._cache = cfg
             cls._cache_mtime = mtime
             return cfg

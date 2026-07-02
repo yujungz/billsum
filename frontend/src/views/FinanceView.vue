@@ -212,7 +212,7 @@ import { Download } from '@element-plus/icons-vue'
 import api from '../api'
 import PaginationBar from '../components/PaginationBar.vue'
 
-const sites = ['ai', 'csp', 'pinova', 'wzg', 'qn', 'digitalcloud']
+const sites = ['ai', 'csp', 'pinova', 'wzg', 'qn', 'digitalcloud', 'wshk']
 const activeTab = ref('supplier')
 
 // ── Shared formatters ──

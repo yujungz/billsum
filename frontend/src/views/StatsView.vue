@@ -126,7 +126,7 @@ import PaginationBar from '../components/PaginationBar.vue'
 
 defineOptions({ name: 'StatsView' })
 
-const sites = ['ai', 'csp', 'pinova', 'wzg', 'qn', 'digitalcloud']
+const sites = ['ai', 'csp', 'pinova', 'wzg', 'qn', 'digitalcloud', 'wshk']
 const logTables = ref([])
 const statsData = ref([])
 const loading = ref(false)
@@ -270,7 +270,11 @@ function saveStatsFields() {
 const resultColumns = computed(() => {
   const activeKeys = new Set()
   for (const g of form.group_by) {
-    for (const k of (GROUP_COL_KEYS[g] || [])) activeKeys.add(k)
+    for (const k of (GROUP_COL_KEYS[g] || [])) {
+      // 渠道名称多选框控制：不勾选时隐去 channel_name 列
+      if (k === 'channel_name' && !showChannelName.value) continue
+      activeKeys.add(k)
+    }
   }
   return allColumns.filter(col => {
     if (groupedKeySet.has(col.key)) return activeKeys.has(col.key)

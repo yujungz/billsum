@@ -40,7 +40,7 @@ _tasks: dict[str, dict] = {}
 #  Task lifecycle
 # --------------------------------------------------------------------------- #
 
-def start_task(src: CondEndpoint, dst: CondEndpoint) -> str:
+def start_task(src: CondEndpoint, dst: CondEndpoint, skip_import: bool = False) -> str:
     task_id = uuid.uuid4().hex[:8]
     _tasks[task_id] = {
         "task_id": task_id,
@@ -52,7 +52,7 @@ def start_task(src: CondEndpoint, dst: CondEndpoint) -> str:
 
     async def _run():
         try:
-            await run_all(task_id, src, dst)
+            await run_all(task_id, src, dst, skip_import)
         except Exception as e:
             log.exception("conduction task %s crashed", task_id)
             _append_log(task_id, "错误", False, str(e))
@@ -394,7 +394,7 @@ async def _phase_import(task_id, dst, full, tables, local_tgz, sql_name, work):
 #  Pipeline
 # --------------------------------------------------------------------------- #
 
-async def run_all(task_id: str, src: CondEndpoint, dst: CondEndpoint):
+async def run_all(task_id: str, src: CondEndpoint, dst: CondEndpoint, skip_import: bool = False):
     work = COND_DIR / task_id
     work.mkdir(parents=True, exist_ok=True)
 
@@ -428,11 +428,13 @@ async def run_all(task_id: str, src: CondEndpoint, dst: CondEndpoint):
         _append_log(task_id, "导出", False, str(e))
         return
 
-    # Step 4-5: import local tgz → destination
-    try:
-        await _phase_import(task_id, dst, full, tables, local_tgz, sql_name, work)
-    except Exception as e:
-        _append_log(task_id, "导入", False, str(e))
-        return
-
-    _append_log(task_id, "完成", True, "数据传导完成")
+    # Step 4-5: import local tgz → destination (skipped when only download requested)
+    if skip_import:
+        _append_log(task_id, "完成", True, "远程文件已下载完成")
+    else:
+        try:
+            await _phase_import(task_id, dst, full, tables, local_tgz, sql_name, work)
+        except Exception as e:
+            _append_log(task_id, "导入", False, str(e))
+            return
+        _append_log(task_id, "完成", True, "数据传导完成")
