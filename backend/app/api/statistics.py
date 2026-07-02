@@ -3,9 +3,13 @@
 import io
 import json
 import logging
+import os
+import time
+import uuid
+from pathlib import Path
 
-from fastapi import APIRouter, Query
-from fastapi.responses import Response
+from fastapi import APIRouter, Query, HTTPException
+from fastapi.responses import Response, FileResponse
 from pydantic import BaseModel
 import openpyxl
 from openpyxl.styles import Font
@@ -13,6 +17,8 @@ from openpyxl.styles import Font
 from app import database as db
 from app.config import AppConfig
 from app.services import stats_service
+
+log = logging.getLogger(__name__)
 
 log = logging.getLogger(__name__)
 
@@ -190,6 +196,97 @@ async def _write_detail_sheets(wb, config, detail_cols, where, params):
     log.info("detail export %s / %s total=%d written=%d", db_name, table, total, processed)
 
 
+# ── Async detail export task machinery ──
+
+DATA_DIR = Path(os.getenv("DATA_DIR", "/app/data"))
+_STATS_EXPORT_TASKS: dict[str, dict] = {}
+
+
+def start_stats_detail_task(site: str, table_name: str, filters: dict | None,
+                            show_channel_name: bool, fields: str) -> str:
+    """Start a background detail export task, return task_id immediately."""
+    task_id = uuid.uuid4().hex[:8]
+    _STATS_EXPORT_TASKS[task_id] = {
+        "task_id": task_id,
+        "status": "running",
+        "progress": "排队中",
+        "start_time": time.time(),
+        "end_time": None,
+        "file_path": None,
+        "error": None,
+        "site": site,
+        "table_name": table_name,
+    }
+
+    async def _run():
+        try:
+            await _run_stats_detail(task_id, site, table_name, filters, show_channel_name, fields)
+            _STATS_EXPORT_TASKS[task_id]["status"] = "done"
+        except Exception as e:
+            log.exception("stats detail export task %s failed", task_id)
+            _STATS_EXPORT_TASKS[task_id]["status"] = "failed"
+            _STATS_EXPORT_TASKS[task_id]["error"] = str(e)
+        finally:
+            _STATS_EXPORT_TASKS[task_id]["end_time"] = time.time()
+
+    import asyncio
+    asyncio.create_task(_run())
+    return task_id
+
+
+async def _run_stats_detail(task_id: str, site: str, table_name: str,
+                            filters: dict | None,
+                            show_channel_name: bool, fields: str):
+    task = _STATS_EXPORT_TASKS[task_id]
+    task["progress"] = "查询列配置..."
+    show_ch = show_channel_name
+    detail_cols = _build_detail_columns(show_ch, fields)
+    if not detail_cols:
+        task["error"] = "无可导出列"
+        return
+
+    where, params = _detail_where(filters)
+    config_req = type("Config", (), {"db_name": f"sum_{site}", "table_name": table_name})()
+
+    task["progress"] = "准备写入..."
+    wb = openpyxl.Workbook(write_only=True)
+    await _write_detail_sheets(wb, config_req, detail_cols, where, params)
+
+    # Save to temp file
+    out_dir = DATA_DIR / "stats_detail" / task_id
+    out_dir.mkdir(parents=True, exist_ok=True)
+    file_path = out_dir / "detail.xlsx"
+    wb.save(str(file_path))
+
+    task["file_path"] = str(file_path)
+    task["progress"] = "完成"
+
+
+def get_stats_detail_status(task_id: str) -> dict | None:
+    t = _STATS_EXPORT_TASKS.get(task_id)
+    if not t:
+        return None
+    elapsed = (t["end_time"] or time.time()) - t["start_time"]
+    return {
+        "task_id": task_id,
+        "status": t["status"],
+        "progress": t["progress"],
+        "error": t.get("error"),
+        "elapsed": round(elapsed, 1),
+    }
+
+
+def get_stats_detail_download(task_id: str) -> tuple[str, str] | None:
+    t = _STATS_EXPORT_TASKS.get(task_id)
+    if not t or t["status"] not in ("done", "failed"):
+        return None
+    path = t.get("file_path")
+    if not path or not os.path.exists(path):
+        return None
+    fn = f"{t.get('site', 'stats')}_{t.get('table_name', 'detail')}_明细.xlsx"
+    return path, fn
+
+
 # ── Pydantic model ──
 
 
@@ -210,7 +307,8 @@ class StatsRequest(BaseModel):
 @router.post("/query")
 async def query_stats(req: StatsRequest):
     result = await stats_service.query_stats(
-        req.site, req.table_name, req.group_by, req.filters, req.show_zero
+        req.site, req.table_name, req.group_by, req.filters, req.show_zero,
+        show_channel_name=req.show_channel_name,
     )
     return {"data": result}
 
@@ -224,7 +322,8 @@ async def get_distinct(site: str = Query(...), table: str = Query(...), field: s
 @router.post("/export")
 async def export_stats(req: StatsRequest):
     result = await stats_service.query_stats(
-        req.site, req.table_name, req.group_by, req.filters, req.show_zero
+        req.site, req.table_name, req.group_by, req.filters, req.show_zero,
+        show_channel_name=req.show_channel_name,
     )
     if not result:
         return Response(content=b"", status_code=204)
@@ -268,6 +367,17 @@ async def export_stats(req: StatsRequest):
         ("platform_quota", "平台额度"),
     ]
     visible = [(k, l) for k, l in col_def if any(r.get(k) is not None for r in result)]
+
+    # 字段选择过滤：若前端传了 fields，只保留被选中的列（按前端传入顺序）
+    if req.fields:
+        try:
+            flds = {x["name"] for x in json.loads(req.fields)}
+            # col_def 的非可计算字段（如粒度列）始终保留，不在 fields 中但要保留
+            # 粒度列属于固定列，不在 FIELD_SQL 中，保留
+            data_keys = set(k for k, _ in col_def if k not in FIELD_SQL)
+            visible = [(k, l) for k, l in visible if k in data_keys or k in flds]
+        except Exception:
+            pass
 
     if req.group_by:
         date_col = "period_day" if "day" in req.group_by else "period_month"
@@ -334,3 +444,31 @@ async def export_stats_detail(req: StatsRequest):
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
+
+
+@router.post("/export-detail-async")
+async def export_stats_detail_async(req: StatsRequest):
+    """Start background detail export and return task_id."""
+    filters_dict = req.filters
+    task_id = start_stats_detail_task(
+        req.site, req.table_name, filters_dict,
+        req.show_channel_name, req.fields
+    )
+    return {"task_id": task_id}
+
+
+@router.get("/export-detail-status")
+async def export_stats_detail_status(task_id: str = Query(...)):
+    result = get_stats_detail_status(task_id)
+    if not result:
+        raise HTTPException(404, detail="任务不存在")
+    return result
+
+
+@router.get("/export-detail-download")
+async def export_stats_detail_download(task_id: str = Query(...)):
+    res = get_stats_detail_download(task_id)
+    if not res:
+        raise HTTPException(404, detail="明细文件尚未生成或已被清理")
+    path, fn = res
+    return FileResponse(path, filename=fn, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")

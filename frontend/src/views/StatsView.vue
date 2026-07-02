@@ -417,6 +417,7 @@ async function doQuery() {
       group_by: form.group_by,
       filters: Object.keys(filters).length ? filters : null,
       show_zero: form.show_zero,
+      show_channel_name: showChannelName.value,
     })
     const rows = data.data || []
     if (form.desc_order) {
@@ -482,12 +483,7 @@ async function doExport(format = 'xlsx') {
         if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).detail || '导出失败')
         downloadBlob(await resp.blob(), fnSum)
         if (showLogDetail.value) {
-          exportTimerText.value = `正在导出明细...`
-          const d = await fetch('/api/stats/export-detail', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-          })
-          if (!d.ok) throw new Error((await d.json().catch(() => ({}))).detail || '明细导出失败')
-          downloadBlob(await d.blob(), fnDetail)
+          await _exportDetail(null, fnDetail, body)
         }
         exportTimerText.value = `耗时 ${((Date.now() - t0) / 1000).toFixed(1)}s`
         clearInterval(_timer)
@@ -513,15 +509,7 @@ async function doExport(format = 'xlsx') {
 
       // 2. 明细文件（可选）
       if (showLogDetail.value) {
-        exportTimerText.value = `正在导出 ${fnDetail} ...`
-        const r2 = await fetch('/api/stats/export-detail', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-        })
-        if (!r2.ok) throw new Error((await r2.json().catch(() => ({}))).detail || '明细导出失败')
-        const fh2 = await dirHandle.getFileHandle(fnDetail, { create: true })
-        const w2 = await fh2.createWritable()
-        await w2.write(await r2.blob())
-        await w2.close()
+        await _exportDetail(dirHandle, fnDetail, body)
       }
 
       clearInterval(_timer)
@@ -555,6 +543,39 @@ async function doExport(format = 'xlsx') {
     downloadBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), `${form.table_name}_sum.csv`)
     exportTimerText.value = `耗时 ${((Date.now() - t0) / 1000).toFixed(1)}s`
     clearInterval(_timer)
+  }
+}
+
+async function _exportDetail(dirHandle, fnDetail, body) {
+  // 启动后台任务
+  const { data: td } = await api.stats.exportDetailAsync(body)
+  const taskId = td.task_id
+  // 轮询直到完成
+  while (true) {
+    await new Promise(r => setTimeout(r, 2000))
+    const { data } = await api.stats.exportDetailStatus(taskId)
+    if (data.status === 'done') {
+      const { data: blob } = await api.stats.exportDetailDownload(taskId)
+      if (dirHandle) {
+        // polling 可能导致目录句柄权限失效，重新请求
+        try { await dirHandle.requestPermission({ mode: 'readwrite' }) } catch {}
+        const fh = await dirHandle.getFileHandle(fnDetail, { create: true }).catch(() => null)
+        if (fh) {
+          const w = await fh.createWritable()
+          await w.write(blob)
+          await w.close()
+        } else {
+          downloadBlob(blob, fnDetail)
+        }
+      } else {
+        downloadBlob(blob, fnDetail)
+      }
+      return
+    } else if (data.status === 'failed') {
+      throw new Error(data.error || '明细导出失败')
+    } else if (data.progress) {
+      exportTimerText.value = `正在导出明细: ${data.progress}`
+    }
   }
 }
 

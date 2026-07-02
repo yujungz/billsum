@@ -59,13 +59,15 @@ export default {
     },
     deleteTable: (site, table) => api.delete('/query/table', { params: { site, table } }),
     importTable: (site, table, formData) => api.post('/query/import', formData, { params: { site, table }, headers: { 'Content-Type': 'multipart/form-data' } }),
-    // 数据统计
-    statsExportDetail: (data) => api.post('/stats/export-detail', data, { responseType: 'blob' }),
   },
   // Stats
   stats: {
     query: (data) => api.post('/stats/query', data),
     distinct: (site, table, field) => api.get('/stats/distinct', { params: { site, table, field } }),
+    exportDetail: (data) => api.post('/stats/export-detail', data, { responseType: 'blob' }),
+    exportDetailAsync: (data) => api.post('/stats/export-detail-async', data),
+    exportDetailStatus: (taskId) => api.get('/stats/export-detail-status', { params: { task_id: taskId } }),
+    exportDetailDownload: (taskId) => api.get('/stats/export-detail-download', { params: { task_id: taskId }, responseType: 'blob' }),
   },
   // Settings
   settings: {

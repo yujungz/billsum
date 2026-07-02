@@ -10,12 +10,14 @@ async def query_stats(
     group_by: list[str] | None = None,
     filters: dict | None = None,
     show_zero: bool = True,
+    show_channel_name: bool = True,
 ) -> list[dict]:
     """Query statistics from a log table.
 
     group_by options: "month", "day", "user", "channel", "model", "token", "group"
     filters: {user_id, channel_id, model_name, username, channel_name}
     show_zero: if False, filter out records with zero total_cost
+    show_channel_name: if False, channel granularity skips channel_name column
     """
     config = AppConfig.load()
     db_name = config.db_name(site)
@@ -38,9 +40,10 @@ async def query_stats(
                 select_fields.append("l.username")
             elif g == "channel":
                 group_fields.append("l.channel_id")
-                group_fields.append("l.channel_name")
                 select_fields.append("l.channel_id")
-                select_fields.append("l.channel_name")
+                if show_channel_name:
+                    group_fields.append("l.channel_name")
+                    select_fields.append("l.channel_name")
             elif g == "model":
                 group_fields.append("l.model_name")
                 select_fields.append("l.model_name")
