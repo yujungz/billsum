@@ -203,8 +203,119 @@ def _map_row_csv(row: list[str], col_map: list[str | None]) -> list | None:
     return vals if vals else None
 
 
+async def _insert_mapped_rows(db_name: str, table: str, mapped_cols: list[str],
+                              mapped_row_iter, overwrite: bool) -> int:
+    """Insert mapped rows in batches of 500, always taking each row's id
+    straight from the file. The id is NEVER recomputed — reassigning it would
+    break the joins logs.user_id/token_id/channel_id -> ex_*.id.
+
+    overwrite=True : plain INSERT (caller truncates first, so no id conflicts).
+    overwrite=False: INSERT IGNORE, so rows whose id already exists are skipped
+                     (existing data left untouched) and only genuinely new ids
+                     are inserted — still with their original file id.
+    """
+    from app import database as db
+
+    verb = "INSERT" if overwrite else "INSERT IGNORE"
+    cols_sql = ", ".join(f"`{c}`" for c in mapped_cols)
+    placeholders = ", ".join(["%s"] * len(mapped_cols))
+    sql = f"{verb} INTO `{table}` ({cols_sql}) VALUES ({placeholders})"
+
+    count = 0
+    batch = []
+    for vals in mapped_row_iter:
+        if vals is None:
+            continue
+        batch.append(vals)
+        if len(batch) >= 500:
+            await db.execute_many(sql, batch, db=db_name)
+            count += len(batch)
+            batch = []
+    if batch:
+        await db.execute_many(sql, batch, db=db_name)
+        count += len(batch)
+    return count
+
+
+async def _enrich_tokens_username(db_name: str, mapped_cols: list[str], rows: list[list]):
+    """ex_tokens: the `username` column is NOT NULL in the table but is absent
+    from import files. Derive it from users.username via user_id (users.id);
+    rows with no matching user get an empty string. Appends `username` to
+    mapped_cols and a value to each row (in place)."""
+    from app import database as db
+
+    uid_pos = mapped_cols.index("user_id") if "user_id" in mapped_cols else -1
+
+    # collect distinct user_ids present in the file
+    uids: list[int] = []
+    seen: set[int] = set()
+    if uid_pos >= 0:
+        for r in rows:
+            try:
+                uid = int(r[uid_pos])
+            except (TypeError, ValueError):
+                continue
+            if uid not in seen:
+                seen.add(uid)
+                uids.append(uid)
+
+    # fetch username per user_id, chunked to keep the IN-list reasonable
+    mapping: dict[int, str] = {}
+    for i in range(0, len(uids), 1000):
+        chunk = uids[i:i + 1000]
+        ph = ",".join(["%s"] * len(chunk))
+        got = await db.fetch_all(
+            f"SELECT id, username FROM users WHERE id IN ({ph})", chunk, db=db_name
+        )
+        for row in got:
+            mapping[row["id"]] = row.get("username") or ""
+
+    mapped_cols.append("username")
+    for r in rows:
+        val = ""
+        if uid_pos >= 0:
+            try:
+                val = mapping.get(int(r[uid_pos]), "")
+            except (TypeError, ValueError):
+                val = ""
+        r.append(val)
+
+
+async def _map_and_insert(db_name: str, table: str, db_col_set: set[str],
+                          col_map: list[str | None], raw_iter, map_fn, overwrite: bool):
+    """Resolve mapped columns and insert rows.
+
+    For ex_tokens, the table's `username` column is NOT NULL yet never present
+    in import files; enrich it from the users table before inserting so the
+    INSERT doesn't fail on the missing column.
+    """
+    mapped_cols = [c for c in col_map if c is not None]
+    if not mapped_cols:
+        raise HTTPException(400, detail="文件列名与表字段无法对应")
+
+    need_username = (
+        table == "ex_tokens"
+        and "username" in db_col_set
+        and "username" not in mapped_cols
+    )
+    if need_username:
+        rows = [v for v in (map_fn(r, col_map) for r in raw_iter) if v is not None]
+        await _enrich_tokens_username(db_name, mapped_cols, rows)
+        await _insert_mapped_rows(db_name, table, mapped_cols, rows, overwrite)
+    else:
+        await _insert_mapped_rows(
+            db_name, table, mapped_cols,
+            (map_fn(r, col_map) for r in raw_iter), overwrite,
+        )
+
+
 @router.post("/import")
-async def import_sql(site: str = Query(...), table: str = Query(...), file: UploadFile = File(...)):
+async def import_sql(
+    site: str = Query(...),
+    table: str = Query(...),
+    overwrite: bool = Query(False),
+    file: UploadFile = File(...),
+):
     _validate_table(table)
     config = AppConfig.load()
     db_name = config.db_name(site)
@@ -239,7 +350,8 @@ async def import_sql(site: str = Query(...), table: str = Query(...), file: Uplo
         import openpyxl
         from app import database as db
 
-        await db.execute(f"TRUNCATE TABLE `{table}`", db=db_name)
+        if overwrite:
+            await db.execute(f"TRUNCATE TABLE `{table}`", db=db_name)
 
         # get actual db column names
         db_cols = await query_service.get_table_columns(site, table)
@@ -251,38 +363,16 @@ async def import_sql(site: str = Query(...), table: str = Query(...), file: Uplo
         rows_iter = ws.iter_rows(values_only=True)
         raw_headers = [str(h).strip() if h is not None else "" for h in next(rows_iter)]
         col_map = _resolve_columns(raw_headers, db_col_set)  # list[str|None], same length as raw_headers
-        mapped_cols = [c for c in col_map if c is not None]
-        if not mapped_cols:
-            raise HTTPException(400, detail="文件列名与表字段无法对应")
 
-        cols_sql = ", ".join(f"`{c}`" for c in mapped_cols)
-        placeholders = ", ".join(["%s"] * len(mapped_cols))
-        sql = f"INSERT INTO `{table}` ({cols_sql}) VALUES ({placeholders})"
-
-        cols_sql = ", ".join(f"`{c}`" for c in col_map)
-        placeholders = ", ".join(["%s"] * len(col_map))
-        sql = f"INSERT INTO `{table}` ({cols_sql}) VALUES ({placeholders})"
-
-        count = 0
-        batch = []
-        for row in rows_iter:
-            vals = _map_row(row, col_map)
-            if vals is not None:
-                batch.append(vals)
-                if len(batch) >= 500:
-                    await db.execute_many(sql, batch, db=db_name)
-                    count += len(batch)
-                    batch = []
-        if batch:
-            await db.execute_many(sql, batch, db=db_name)
-            count += len(batch)
+        await _map_and_insert(db_name, table, db_col_set, col_map, rows_iter, _map_row, overwrite)
         wb.close()
 
     elif ext == ".csv":
         import csv as csv_mod
         from app import database as db
 
-        await db.execute(f"TRUNCATE TABLE `{table}`", db=db_name)
+        if overwrite:
+            await db.execute(f"TRUNCATE TABLE `{table}`", db=db_name)
 
         db_cols = await query_service.get_table_columns(site, table)
         db_col_set = {c["name"] for c in db_cols}
@@ -291,27 +381,8 @@ async def import_sql(site: str = Query(...), table: str = Query(...), file: Uplo
         reader = csv_mod.reader(io.StringIO(text))
         raw_headers = [h.strip() for h in next(reader)]
         col_map = _resolve_columns(raw_headers, db_col_set)
-        mapped_cols = [c for c in col_map if c is not None]
-        if not mapped_cols:
-            raise HTTPException(400, detail="文件列名与表字段无法对应")
 
-        cols_sql = ", ".join(f"`{c}`" for c in mapped_cols)
-        placeholders = ", ".join(["%s"] * len(mapped_cols))
-        sql = f"INSERT INTO `{table}` ({cols_sql}) VALUES ({placeholders})"
-
-        count = 0
-        batch = []
-        for row in reader:
-            vals = _map_row_csv(row, col_map)
-            if vals is not None:
-                batch.append(vals)
-                if len(batch) >= 500:
-                    await db.execute_many(sql, batch, db=db_name)
-                    count += len(batch)
-                    batch = []
-        if batch:
-            await db.execute_many(sql, batch, db=db_name)
-            count += len(batch)
+        await _map_and_insert(db_name, table, db_col_set, col_map, reader, _map_row_csv, overwrite)
 
     else:
         raise HTTPException(400, detail=f"不支持的文件格式: {ext}")

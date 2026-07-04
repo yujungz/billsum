@@ -35,6 +35,7 @@
               </template>
             </el-dropdown>
             <span v-if="exportTimerText" class="export-timer">{{ exportTimerText }}</span>
+            <el-checkbox v-if="canImport" v-model="overwrite" class="overwrite-cb">覆盖</el-checkbox>
             <el-button v-if="canImport" type="warning" :loading="importLoading" @click="triggerImport">导入</el-button>
             <el-button v-if="canParse" type="warning" :loading="parseLoading" @click="doParse">拆解</el-button>
           </el-form-item>
@@ -137,6 +138,7 @@ const loading = ref(false)
 const importLoading = ref(false)
 const parseLoading = ref(false)
 const exportTimerText = ref('')
+const overwrite = ref(false)
 
 const canImport = computed(() => ['ex_channels', 'ex_tokens', 'ex_users'].includes(selectedTable.value))
 const canParse = computed(() => ['channels', 'tokens', 'users'].includes(selectedTable.value))
@@ -214,6 +216,10 @@ async function openFieldDialog() {
 }
 
 function saveFields() {
+  if (fieldRows.value.every(r => !r.selected)) {
+    ElMessage.warning('至少要选中一个字段')
+    return
+  }
   for (const r of fieldRows.value) {
     fieldConfig[r.name] = { selected: r.selected, label: (r.label || r.name) }
   }
@@ -248,9 +254,10 @@ const TABLE_FILTERS = {
   ex_tokens: [
     { field: 'name', label: 'token名称', type: 'string' },
     { field: 'user_id', label: '用户ID', type: 'number' },
+    { field: 'username', label: '用户名称', type: 'string' },
   ],
   ex_users: [
-    { field: 'username', label: '用户名称', type: 'string' },
+    { field: 'name', label: '用户名称', type: 'string' },
     { field: 'seller', label: '销售员', type: 'string' },
     { field: 'remark', label: '备注', type: 'string' },
   ],
@@ -486,17 +493,20 @@ function triggerImport() {
 
 async function doImport(file) {
   try {
+    const tip = overwrite.value
+      ? `确认导入文件 "${file.name}" 到表 "${selectedTable.value}"？\n（覆盖模式：将先清空表再导入，原有数据会被删除）`
+      : `确认导入文件 "${file.name}" 到表 "${selectedTable.value}"？`
     await ElMessageBox.confirm(
-      `确认导入文件 "${file.name}" 到表 "${selectedTable.value}"？`,
+      tip,
       '导入确认',
-      { confirmButtonText: '确认导入', cancelButtonText: '取消', type: 'info' }
+      { confirmButtonText: '确认导入', cancelButtonText: '取消', type: overwrite.value ? 'warning' : 'info' }
     )
   } catch { return }
   importLoading.value = true
   try {
     const formData = new FormData()
     formData.append('file', file)
-    await api.query.importTable(site.value, selectedTable.value, formData)
+    await api.query.importTable(site.value, selectedTable.value, formData, overwrite.value)
     ElMessage.success('导入成功')
     await loadTables()
     if (selectedTable.value) loadData()
@@ -574,6 +584,10 @@ async function doParse() {
   color: #67c23a;
   font-size: 13px;
   font-weight: 500;
+}
+.overwrite-cb {
+  margin-left: 12px !important;
+  margin-right: 12px !important;
 }
 .field-dialog-toolbar { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; }
 .field-count { color: #909399; font-size: 12px; }

@@ -121,12 +121,17 @@ async def user_stats(
     date_start: str = Query(""),
     date_end: str = Query(""),
     granularity: str = Query(""),
+    with_settlement: bool = Query(False),
+    settle_base: str = Query(""),
 ):
     try:
         glist = [x.strip() for x in granularity.split(",") if x.strip()] if granularity else []
         show_model = "model" in glist
         show_token = "token" in glist
-        monthly = await finance_service.user_monthly(site, table, username, date_start, date_end, show_model)
+        monthly = await finance_service.user_monthly(
+            site, table, username, date_start, date_end, show_model,
+            with_settlement, settle_base,
+        )
         daily = await finance_service.user_daily(site, table, username, date_start, date_end, show_model, show_token)
         return {"monthly": monthly, "daily": daily}
     except Exception as e:
@@ -186,6 +191,8 @@ async def user_stats_export_async(body: dict):
     with_platform = body.get("with_platform", False)
     with_detail = body.get("with_detail", True)
     with_total_cost = body.get("with_total_cost", True)
+    with_settlement = body.get("with_settlement", False)
+    settle_base = body.get("settle_base", "")
     granularity = body.get("granularity", "")
     glist = [x.strip() for x in granularity.split(",") if x.strip()] if granularity else []
     show_model = "model" in glist
@@ -193,7 +200,8 @@ async def user_stats_export_async(body: dict):
     if not site or not table:
         raise HTTPException(400, detail="site, table 不能为空")
     task_id = finance_service.start_export_task(
-        site, table, username, date_start, date_end, with_platform, with_detail, show_model, show_token, with_total_cost
+        site, table, username, date_start, date_end, with_platform, with_detail, show_model, show_token, with_total_cost,
+        with_settlement, settle_base,
     )
     return {"task_id": task_id}
 

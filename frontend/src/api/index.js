@@ -58,7 +58,7 @@ export default {
       return api.get('/query/data', { params })
     },
     deleteTable: (site, table) => api.delete('/query/table', { params: { site, table } }),
-    importTable: (site, table, formData) => api.post('/query/import', formData, { params: { site, table }, headers: { 'Content-Type': 'multipart/form-data' } }),
+    importTable: (site, table, formData, overwrite = false) => api.post('/query/import', formData, { params: { site, table, overwrite }, headers: { 'Content-Type': 'multipart/form-data' } }),
   },
   // Stats
   stats: {

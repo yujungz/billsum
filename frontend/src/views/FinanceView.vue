@@ -74,10 +74,17 @@
               <el-form-item label="截止日期">
                 <el-date-picker v-model="userStatsForm.dateEnd" type="date" value-format="YYYY-MM-DD" style="width: 160px" />
               </el-form-item>
+              <el-form-item label="排序方式">
+                <el-select v-model="userStatsSort" style="width: 120px">
+                  <el-option label="用户ID" value="用户ID" />
+                  <el-option label="额度" value="额度" />
+                </el-select>
+              </el-form-item>
               <el-form-item>
                 <el-checkbox v-model="showPlatformQuota" label="平台额度" style="margin-right: 8px" />
                 <el-checkbox v-model="showTotalCost" label="消费额度" style="margin-right: 8px" />
                 <el-checkbox v-model="showDetail" label="用户明细" style="margin-right: 8px" />
+                <el-checkbox v-model="settleMonthly" label="月度结算" style="margin-right: 8px" />
                 <span class="granularity-group">
                   <span class="granularity-group-label">统计粒度：</span>
                   <el-checkbox v-model="granularity.model" label="模型名" />
@@ -93,7 +100,7 @@
             <el-tabs v-model="userStatsSubTab" class="sub-tabs">
               <el-tab-pane label="月汇总" name="monthly">
                 <div ref="monthlyTableWrapper" class="table-wrapper sub-table-wrapper">
-                  <el-table :data="userStatsMonthly" border stripe :height="subTableHeight" v-loading="userStatsLoading"
+                  <el-table :data="sortedMonthly" border stripe :height="subTableHeight" v-loading="userStatsLoading"
                     style="width: 100%" show-overflow-tooltip show-summary :summary-method="userStatsSummary">
                     <el-table-column v-for="col in userStatsMonthlyCols" :key="col.key" :prop="col.key" :label="col.label"
                       :width="col.width" :formatter="col.formatter" />
@@ -102,7 +109,7 @@
               </el-tab-pane>
               <el-tab-pane label="日统计" name="daily">
                 <div ref="dailyTableWrapper" class="table-wrapper sub-table-wrapper">
-                  <el-table :data="userStatsDaily" border stripe :height="subTableHeight" v-loading="userStatsLoading"
+                  <el-table :data="sortedDaily" border stripe :height="subTableHeight" v-loading="userStatsLoading"
                     style="width: 100%" show-overflow-tooltip show-summary :summary-method="userStatsSummary">
                     <el-table-column v-for="col in userStatsDailyCols" :key="col.key" :prop="col.key" :label="col.label"
                       :width="col.width" :formatter="col.formatter" />
@@ -227,6 +234,10 @@ function fmt6(row, col, val) {
 
 function fmt4(row, col, val) {
   return val != null ? Number(val).toFixed(4) : ''
+}
+
+function fmt2(row, col, val) {
+  return val != null ? Number(val).toFixed(2) : ''
 }
 
 // ── Export timer ──
@@ -425,6 +436,8 @@ const userStatsSubTab = ref('monthly')
 
 const showTotalCost = ref(false)
 const showPlatformQuota = ref(true)
+const userStatsSort = ref('用户ID')   // '用户ID' (asc) | '额度' (desc)
+const settleMonthly = ref(false)      // 月度结算（仅月汇总）
 const batchExport = ref(false)
 const showDetail = ref(false)
 const mergeExport = ref(false)
@@ -488,6 +501,7 @@ const _NO_SUM_KEYS_STATS = new Set([
   '结算周期', '用户名', '模型名', '用户ID', 'Token名称', '日期',
   '序号', '时间',
   '输入单价', '输出单价', '读取缓存单价', '创建缓存5M单价', '创建缓存1H单价',
+  '折扣', '汇率',
 ])
 
 function userStatsSummary({ columns, data }) {
@@ -529,6 +543,7 @@ function detailSummary({ columns }) {
 const userStatsMonthlyCols = computed(() => {
   const cols = [
     { key: '结算周期', label: '结算周期', width: 100 },
+    { key: '用户ID', label: '用户ID', width: 80 },
     { key: '用户名', label: '用户名', width: 120 },
   ]
   if (granularity.model) cols.push({ key: '模型名', label: '模型名', width: 180 })
@@ -538,6 +553,13 @@ const userStatsMonthlyCols = computed(() => {
   )
   if (showTotalCost.value) cols.push({ key: '消费额度', label: '消费额度', width: 120, formatter: fmt6 })
   if (showPlatformQuota.value) cols.push({ key: '平台额度', label: '平台额度', width: 120, formatter: fmt6 })
+  if (settleMonthly.value) {
+    cols.push(
+      { key: '折扣', label: '折扣', width: 90, formatter: fmt2 },
+      { key: '汇率', label: '汇率', width: 90, formatter: fmt2 },
+      { key: '实际款项(人民币)', label: '实际款项(人民币)', width: 140, formatter: fmt6 },
+    )
+  }
   return cols
 })
 
@@ -561,6 +583,52 @@ const userStatsDailyCols = computed(() => {
   if (showPlatformQuota.value) cols.push({ key: '平台额度', label: '平台额度', width: 110, formatter: fmt6 })
   return cols
 })
+
+// ── Sorting (applies to 月汇总 / 日统计; detail keeps backend order) ──
+function _toNum(v) {
+  if (typeof v === 'number') return v
+  if (v === null || v === undefined || v === '') return 0
+  const n = parseFloat(v)
+  return isNaN(n) ? 0 : n
+}
+
+// Secondary sort within each group, preserving the group's first-appearance
+// order from the backend (结算周期 for monthly, 日期 DESC for daily).
+function _groupSort(rows, groupKey, sort) {
+  if (!rows || rows.length === 0) return rows
+  const order = {}
+  let n = 0
+  for (const r of rows) {
+    const g = r[groupKey]
+    if (!(g in order)) order[g] = n++
+  }
+  const { key, dir } = sort
+  return [...rows].sort((a, b) => {
+    const d = (order[a[groupKey]] ?? 0) - (order[b[groupKey]] ?? 0)
+    if (d !== 0) return d
+    return (_toNum(a[key]) - _toNum(b[key])) * dir
+  })
+}
+
+// 用户ID → asc; 额度 → desc, field = 平台额度 > 消费额度 > 输出token
+const userStatsSortKey = computed(() => {
+  if (userStatsSort.value !== '额度') return { key: '用户ID', dir: 1 }
+  if (showPlatformQuota.value) return { key: '平台额度', dir: -1 }
+  if (showTotalCost.value) return { key: '消费额度', dir: -1 }
+  return { key: '输出token(M)', dir: -1 }
+})
+
+const sortedMonthly = computed(() => _groupSort(userStatsMonthly.value, '结算周期', userStatsSortKey.value))
+const sortedDaily = computed(() => _groupSort(userStatsDaily.value, '日期', userStatsSortKey.value))
+
+// 月度结算参数（查询与导出共用）：都显示→平台额度，否则取显示中的那个
+function settlementParams() {
+  if (!settleMonthly.value) return {}
+  return {
+    with_settlement: true,
+    settle_base: showPlatformQuota.value ? '平台额度' : (showTotalCost.value ? '消费额度' : ''),
+  }
+}
 
 const userStatsDetailCols = computed(() => {
   const cols = [
@@ -640,6 +708,7 @@ async function doUserStatsQuery() {
     }
     if (userStatsForm.dateStart) params.date_start = userStatsForm.dateStart
     if (userStatsForm.dateEnd) params.date_end = userStatsForm.dateEnd
+    Object.assign(params, settlementParams())
     const { data } = await api.finance.userStats(params)
     saveGranularity()
     userStatsMonthly.value = data.monthly || []
@@ -752,6 +821,7 @@ async function _doSingleExport(saveHandle, fileName) {
     with_detail: showDetail.value,
     with_total_cost: showTotalCost.value,
     granularity: granularityStr.value,
+    ...settlementParams(),
   })
   const taskId = td.task_id
 
@@ -825,6 +895,7 @@ async function _doBatchExport() {
           with_detail: showDetail.value,
           with_total_cost: showTotalCost.value,
           granularity: granularityStr.value,
+          ...settlementParams(),
         })
         const taskId = td.task_id
 
