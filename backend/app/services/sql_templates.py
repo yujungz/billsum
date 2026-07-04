@@ -77,9 +77,12 @@ def sql_old2new(tbn_new: str) -> list[str]:
     return stmts
 
 
-def sql_uptnew(tbn_new: str, mode: str = "full") -> list[str]:
+def sql_uptnew(tbn_new: str, mode: str = "full", with_raw_channels: bool = True) -> list[str]:
     """Generate SQL to fill the processed log table with sales/buyer info.
-    mode: 'full' (wzg/pinova/ai), 'simple' (csp), 'minimal' (qn/digitalcloud)"""
+    mode: 'full' (wzg/pinova/ai), 'simple' (csp), 'minimal' (qn/digitalcloud)
+    with_raw_channels: when False (raw `channels` table absent), derive
+    channel_name from ex_channels only — avoids a 1146 that would skip the
+    whole UPDATE and leave channel_name/us_salesperson/us_discount all empty."""
     stmts: list[str] = []
 
     if mode == "minimal":
@@ -91,12 +94,14 @@ def sql_uptnew(tbn_new: str, mode: str = "full") -> list[str]:
         stmts.append(f"CREATE INDEX `{idx_name}` ON `{tbl}`(id)")
 
     t = tbn_new
+    channels_join = f"\n            LEFT JOIN channels ON `{t}`.channel_id = channels.id" if with_raw_channels else ""
+    channel_name_expr = "COALESCE(ex_channels.name, channels.name)" if with_raw_channels else "ex_channels.name"
+
     if mode == "full":
         stmts.append(f"""UPDATE `{t}`
             LEFT JOIN ex_users ON `{t}`.user_id = ex_users.id
             LEFT JOIN ex_tokens ON `{t}`.token_id = ex_tokens.id
-            LEFT JOIN ex_channels ON `{t}`.channel_id = ex_channels.id
-            LEFT JOIN channels ON `{t}`.channel_id = channels.id
+            LEFT JOIN ex_channels ON `{t}`.channel_id = ex_channels.id{channels_join}
             SET
             `{t}`.us_salesperson = ex_users.seller,
             `{t}`.us_salesperson1 = ex_users.seller,
@@ -108,7 +113,7 @@ def sql_uptnew(tbn_new: str, mode: str = "full") -> list[str]:
             `{t}`.cn_supplier1 = ex_channels.supplier,
             `{t}`.cn_discount = ex_channels.discount,
             `{t}`.cn_discount_orig = ex_channels.discount_orig,
-            `{t}`.channel_name = COALESCE(ex_channels.name, channels.name),
+            `{t}`.channel_name = {channel_name_expr},
             `{t}`.prompt_price = `{t}`.model_ratio * 2,
             `{t}`.completion_price = `{t}`.model_ratio * 2 * `{t}`.completion_ratio,
             `{t}`.cache_price = `{t}`.model_ratio * 2 * `{t}`.cache_ratio,
@@ -117,8 +122,7 @@ def sql_uptnew(tbn_new: str, mode: str = "full") -> list[str]:
     elif mode == "simple":
         stmts.append(f"""UPDATE `{t}`
             LEFT JOIN ex_users ON `{t}`.user_id = ex_users.id
-            LEFT JOIN ex_channels ON `{t}`.channel_id = ex_channels.id
-            LEFT JOIN channels ON `{t}`.channel_id = channels.id
+            LEFT JOIN ex_channels ON `{t}`.channel_id = ex_channels.id{channels_join}
             SET
             `{t}`.us_salesperson = ex_users.seller,
             `{t}`.us_salesperson1 = ex_users.seller,
@@ -130,7 +134,7 @@ def sql_uptnew(tbn_new: str, mode: str = "full") -> list[str]:
             `{t}`.cn_supplier1 = ex_channels.supplier,
             `{t}`.cn_discount = ex_channels.discount,
             `{t}`.cn_discount_orig = ex_channels.discount_orig,
-            `{t}`.channel_name = COALESCE(ex_channels.name, channels.name),
+            `{t}`.channel_name = {channel_name_expr},
             `{t}`.prompt_price = `{t}`.model_ratio * 2,
             `{t}`.completion_price = `{t}`.model_ratio * 2 * `{t}`.completion_ratio,
             `{t}`.cache_price = `{t}`.model_ratio * 2 * `{t}`.cache_ratio,

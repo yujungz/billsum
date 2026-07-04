@@ -446,7 +446,15 @@ async def fill_local(site: str, log_name: str) -> dict:
                 await db.execute(stmt, db=db_name)
 
         # uptnew: fill sales/buyer info (skip ex_ tables gracefully if missing)
-        stmts = sql_uptnew(log_name, mode=site_cfg.uptnew_mode)
+        # Some environments carry only ex_* tables (no raw channels); in that
+        # case derive channel_name from ex_channels alone so the UPDATE doesn't
+        # fail on a missing `channels` table (which would skip everything).
+        ch_check = await db.fetch_one(
+            "SELECT TABLE_NAME FROM information_schema.TABLES "
+            "WHERE TABLE_SCHEMA=%s AND TABLE_NAME='channels'",
+            (db_name,),
+        )
+        stmts = sql_uptnew(log_name, mode=site_cfg.uptnew_mode, with_raw_channels=bool(ch_check))
         for stmt in stmts:
             if stmt.startswith("CREATE INDEX"):
                 parts = stmt.split("`")

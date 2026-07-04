@@ -429,6 +429,9 @@ async function deleteConfirm() {
   await loadTables()
 }
 
+// ex_tokens.username 由 user_id 关联得出，导出(及再导入)时不需要该列
+const EXPORT_EXCLUDE = { ex_tokens: ['username'] }
+
 async function exportConfirm(format) {
   if (!selectedTable.value) {
     ElMessage.warning('请先选择表')
@@ -438,7 +441,10 @@ async function exportConfirm(format) {
   const fileName = `${site.value}_${selectedTable.value}.${format === 'xlsx' ? 'xlsx' : format === 'csv' ? 'csv' : 'sql'}`
   const filters = buildFilters()
   const filterStr = filters ? JSON.stringify(filters) : ''
-  const fieldsArr = displayColumns.value.map(c => ({ name: c.name, label: c.label }))
+  const exclude = EXPORT_EXCLUDE[selectedTable.value] || []
+  const fieldsArr = displayColumns.value
+    .filter(c => !exclude.includes(c.name))
+    .map(c => ({ name: c.name, label: c.label }))
   const fieldsStr = fieldsArr.length ? `&fields=${encodeURIComponent(JSON.stringify(fieldsArr))}` : ''
   const url = `/api/query/export?site=${site.value}&table=${selectedTable.value}&format=${format}${filterStr ? `&filters=${encodeURIComponent(filterStr)}` : ''}${fieldsStr}`
 

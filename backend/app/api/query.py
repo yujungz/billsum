@@ -2,6 +2,7 @@
 
 import csv
 import io
+import logging
 import os
 import re
 import subprocess
@@ -12,6 +13,8 @@ from fastapi.responses import Response
 
 from app.config import AppConfig
 from app.services import query_service, parser_service
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/query", tags=["query"])
 
@@ -238,10 +241,12 @@ async def _insert_mapped_rows(db_name: str, table: str, mapped_cols: list[str],
 
 
 async def _enrich_tokens_username(db_name: str, mapped_cols: list[str], rows: list[list]):
-    """ex_tokens: the `username` column is NOT NULL in the table but is absent
-    from import files. Derive it from users.username via user_id (users.id);
-    rows with no matching user get an empty string. Appends `username` to
-    mapped_cols and a value to each row (in place)."""
+    """ex_tokens: the `username` column is NOT NULL but is absent from import
+    files. Derive it from ex_users.name via user_id (ex_users.id) — ex_users
+    lives in the same DB as ex_tokens, so it is always available; rows with no
+    match get an empty string. (If the file itself has a `username` column it
+    is imported directly and this function is not called.) Appends `username`
+    to mapped_cols and a value to each row (in place)."""
     from app import database as db
 
     uid_pos = mapped_cols.index("user_id") if "user_id" in mapped_cols else -1
@@ -259,16 +264,23 @@ async def _enrich_tokens_username(db_name: str, mapped_cols: list[str], rows: li
                 seen.add(uid)
                 uids.append(uid)
 
-    # fetch username per user_id, chunked to keep the IN-list reasonable
+    # fetch username per user_id from ex_users (GROUP BY id to dedupe, since
+    # ex_users has no PK). Tolerate a missing ex_users table -> empty username.
     mapping: dict[int, str] = {}
-    for i in range(0, len(uids), 1000):
-        chunk = uids[i:i + 1000]
-        ph = ",".join(["%s"] * len(chunk))
-        got = await db.fetch_all(
-            f"SELECT id, username FROM users WHERE id IN ({ph})", chunk, db=db_name
-        )
-        for row in got:
-            mapping[row["id"]] = row.get("username") or ""
+    if uid_pos >= 0 and uids:
+        try:
+            for i in range(0, len(uids), 1000):
+                chunk = uids[i:i + 1000]
+                ph = ",".join(["%s"] * len(chunk))
+                got = await db.fetch_all(
+                    f"SELECT id, MAX(name) AS name FROM ex_users "
+                    f"WHERE id IN ({ph}) GROUP BY id",
+                    chunk, db=db_name,
+                )
+                for row in got:
+                    mapping[row["id"]] = row.get("name") or ""
+        except Exception as ex:
+            log.warning("enrich ex_tokens.username skipped (ex_users unavailable): %s", ex)
 
     mapped_cols.append("username")
     for r in rows:
