@@ -20,7 +20,7 @@
               <el-option v-for="t in tables" :key="t.name" :label="t.name" :value="t.name" />
             </el-select>
           </el-form-item>
-          <el-form-item>
+          <el-form-item class="query-actions">
             <el-button type="info" plain :icon="Operation" :disabled="!selectedTable" @click="openFieldDialog">字段选择</el-button>
             <el-button type="primary" :loading="loading" @click="doQuery">查询</el-button>
             <el-button type="danger" @click="deleteConfirm">删除表</el-button>
@@ -594,6 +594,14 @@ async function doParse() {
 .overwrite-cb {
   margin-left: 12px !important;
   margin-right: 12px !important;
+}
+.query-actions :deep(.el-button),
+.query-actions :deep(.el-dropdown) {
+  margin-left: 8px;
+}
+.query-actions :deep(.el-button:first-child),
+.query-actions :deep(.el-dropdown:first-child) {
+  margin-left: 0;
 }
 .field-dialog-toolbar { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; }
 .field-count { color: #909399; font-size: 12px; }

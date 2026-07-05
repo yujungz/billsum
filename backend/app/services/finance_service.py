@@ -641,6 +641,13 @@ async def _run_export(task_id: str, site: str, table: str, username: str,
 
 _SETTLE_NUM_FMT = {"折扣": "0.00", "汇率": "0.00"}
 
+# XML-illegal control chars stripped from cell values before writing to xlsx
+_ILLEGAL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
+def _clean_cell(v):
+    return _ILLEGAL_CHARS_RE.sub("", v) if isinstance(v, str) else v
+
 
 def _write_sheet_streaming(ws, rows: list[dict], total_fields: list[str],
                            num_formats: dict[str, str] | None = None):
@@ -665,7 +672,7 @@ def _write_sheet_streaming(ws, rows: list[dict], total_fields: list[str],
         c.alignment = Alignment(horizontal="center")
     ws.append(header_cells)
     for r in rows:
-        vals = list(r.values())
+        vals = [_clean_cell(v) for v in r.values()]
         if fmt_cols:
             out = []
             for i, v in enumerate(vals):

@@ -139,6 +139,11 @@ def _build_xlsx(columns, rows):
     import openpyxl
     from openpyxl.styles import Font
 
+    illegal_re = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+    def _clean(v):
+        return illegal_re.sub("", v) if isinstance(v, str) else v
+
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Data"
@@ -148,7 +153,7 @@ def _build_xlsx(columns, rows):
         ws.column_dimensions[openpyxl.utils.get_column_letter(ci)].width = max(len(str(c['label'])) * 2, 12)
     for ri, row in enumerate(rows, 2):
         for ci, c in enumerate(columns, 1):
-            ws.cell(row=ri, column=ci, value=row.get(c['name'], ''))
+            ws.cell(row=ri, column=ci, value=_clean(row.get(c['name'], '')))
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
@@ -184,25 +189,42 @@ def _resolve_columns(raw_headers: list[str], db_columns: set[str]) -> list[str |
     return result
 
 
-def _map_row(row: tuple, col_map: list[str | None]) -> list | None:
+# Column DATA_TYPEs that are numeric — used to give empty cells a NOT-NULL-safe
+# value (0 for numbers, '' for text) instead of failing the INSERT.
+_NUM_TYPES = {
+    "int", "integer", "bigint", "smallint", "mediumint", "tinyint",
+    "decimal", "numeric", "float", "double", "real", "bit",
+}
+
+
+def _coerce_val(col, val, col_types):
+    """Empty cell -> NOT-NULL-safe default: 0 for numeric columns, '' otherwise."""
+    if val is None or val == "":
+        if (col_types or {}).get(col) in _NUM_TYPES:
+            return 0
+        return ""
+    return val
+
+
+def _map_row(row: tuple, col_map: list[str | None], col_types: dict | None = None) -> list | None:
     """Extract values from a row, only keeping columns that mapped to db fields."""
     vals = []
     for i, col in enumerate(col_map):
         if col is None:
             continue
         v = row[i] if i < len(row) else None
-        vals.append(None if v is None else v)
+        vals.append(_coerce_val(col, v, col_types))
     return vals if vals else None
 
 
-def _map_row_csv(row: list[str], col_map: list[str | None]) -> list | None:
+def _map_row_csv(row: list[str], col_map: list[str | None], col_types: dict | None = None) -> list | None:
     """Extract values from a CSV row, only keeping columns that mapped to db fields."""
     vals = []
     for i, col in enumerate(col_map):
         if col is None:
             continue
         v = row[i] if i < len(row) else ""
-        vals.append(None if v == "" else v)
+        vals.append(_coerce_val(col, v, col_types))
     return vals if vals else None
 
 
@@ -242,11 +264,10 @@ async def _insert_mapped_rows(db_name: str, table: str, mapped_cols: list[str],
 
 async def _enrich_tokens_username(db_name: str, mapped_cols: list[str], rows: list[list]):
     """ex_tokens: the `username` column is NOT NULL but is absent from import
-    files. Derive it from ex_users.name via user_id (ex_users.id) — ex_users
-    lives in the same DB as ex_tokens, so it is always available; rows with no
-    match get an empty string. (If the file itself has a `username` column it
-    is imported directly and this function is not called.) Appends `username`
-    to mapped_cols and a value to each row (in place)."""
+    files. Derive it via user_id — prefer `users.username` (users.id); if the
+    raw users table is absent (ex_-only environment), fall back to ex_users.name.
+    Rows with no match get an empty string. (If the file itself has a `username`
+    column it is imported directly and this function is not called.)"""
     from app import database as db
 
     uid_pos = mapped_cols.index("user_id") if "user_id" in mapped_cols else -1
@@ -264,23 +285,26 @@ async def _enrich_tokens_username(db_name: str, mapped_cols: list[str], rows: li
                 seen.add(uid)
                 uids.append(uid)
 
-    # fetch username per user_id from ex_users (GROUP BY id to dedupe, since
-    # ex_users has no PK). Tolerate a missing ex_users table -> empty username.
+    # fetch username per user_id; try users first, fall back to ex_users.
+    # GROUP BY id dedups (neither table is guaranteed to have a PK on id).
     mapping: dict[int, str] = {}
     if uid_pos >= 0 and uids:
-        try:
-            for i in range(0, len(uids), 1000):
-                chunk = uids[i:i + 1000]
-                ph = ",".join(["%s"] * len(chunk))
-                got = await db.fetch_all(
-                    f"SELECT id, MAX(name) AS name FROM ex_users "
-                    f"WHERE id IN ({ph}) GROUP BY id",
-                    chunk, db=db_name,
-                )
-                for row in got:
-                    mapping[row["id"]] = row.get("name") or ""
-        except Exception as ex:
-            log.warning("enrich ex_tokens.username skipped (ex_users unavailable): %s", ex)
+        for src_table, src_col in (("users", "username"), ("ex_users", "name")):
+            try:
+                for i in range(0, len(uids), 1000):
+                    chunk = uids[i:i + 1000]
+                    ph = ",".join(["%s"] * len(chunk))
+                    got = await db.fetch_all(
+                        f"SELECT id, MAX({src_col}) AS uname "
+                        f"FROM {src_table} WHERE id IN ({ph}) GROUP BY id",
+                        chunk, db=db_name,
+                    )
+                    for row in got:
+                        mapping[row["id"]] = row.get("uname") or ""
+                break  # source queried successfully — stop falling back
+            except Exception as ex:
+                log.warning("enrich ex_tokens.username: %s unavailable: %s", src_table, ex)
+                continue
 
     mapped_cols.append("username")
     for r in rows:
@@ -294,7 +318,8 @@ async def _enrich_tokens_username(db_name: str, mapped_cols: list[str], rows: li
 
 
 async def _map_and_insert(db_name: str, table: str, db_col_set: set[str],
-                          col_map: list[str | None], raw_iter, map_fn, overwrite: bool):
+                          col_map: list[str | None], raw_iter, map_fn, overwrite: bool,
+                          col_types: dict[str, str] | None = None):
     """Resolve mapped columns and insert rows.
 
     For ex_tokens, the table's `username` column is NOT NULL yet never present
@@ -311,13 +336,13 @@ async def _map_and_insert(db_name: str, table: str, db_col_set: set[str],
         and "username" not in mapped_cols
     )
     if need_username:
-        rows = [v for v in (map_fn(r, col_map) for r in raw_iter) if v is not None]
+        rows = [v for v in (map_fn(r, col_map, col_types) for r in raw_iter) if v is not None]
         await _enrich_tokens_username(db_name, mapped_cols, rows)
         await _insert_mapped_rows(db_name, table, mapped_cols, rows, overwrite)
     else:
         await _insert_mapped_rows(
             db_name, table, mapped_cols,
-            (map_fn(r, col_map) for r in raw_iter), overwrite,
+            (map_fn(r, col_map, col_types) for r in raw_iter), overwrite,
         )
 
 
@@ -368,6 +393,7 @@ async def import_sql(
         # get actual db column names
         db_cols = await query_service.get_table_columns(site, table)
         db_col_set = {c["name"] for c in db_cols}
+        col_types = {c["name"]: c["type"] for c in db_cols}
 
         buf = io.BytesIO(content)
         wb = openpyxl.load_workbook(buf, read_only=True)
@@ -376,7 +402,7 @@ async def import_sql(
         raw_headers = [str(h).strip() if h is not None else "" for h in next(rows_iter)]
         col_map = _resolve_columns(raw_headers, db_col_set)  # list[str|None], same length as raw_headers
 
-        await _map_and_insert(db_name, table, db_col_set, col_map, rows_iter, _map_row, overwrite)
+        await _map_and_insert(db_name, table, db_col_set, col_map, rows_iter, _map_row, overwrite, col_types)
         wb.close()
 
     elif ext == ".csv":
@@ -388,13 +414,14 @@ async def import_sql(
 
         db_cols = await query_service.get_table_columns(site, table)
         db_col_set = {c["name"] for c in db_cols}
+        col_types = {c["name"]: c["type"] for c in db_cols}
 
         text = content.decode("utf-8-sig")
         reader = csv_mod.reader(io.StringIO(text))
         raw_headers = [h.strip() for h in next(reader)]
         col_map = _resolve_columns(raw_headers, db_col_set)
 
-        await _map_and_insert(db_name, table, db_col_set, col_map, reader, _map_row_csv, overwrite)
+        await _map_and_insert(db_name, table, db_col_set, col_map, reader, _map_row_csv, overwrite, col_types)
 
     else:
         raise HTTPException(400, detail=f"不支持的文件格式: {ext}")

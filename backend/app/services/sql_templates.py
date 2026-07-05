@@ -82,11 +82,17 @@ def sql_uptnew(tbn_new: str, mode: str = "full", with_raw_channels: bool = True)
     mode: 'full' (wzg/pinova/ai), 'simple' (csp), 'minimal' (qn/digitalcloud)
     with_raw_channels: when False (raw `channels` table absent), derive
     channel_name from ex_channels only — avoids a 1146 that would skip the
-    whole UPDATE and leave channel_name/us_salesperson/us_discount all empty."""
+    whole UPDATE and leave channel_name/us_salesperson/us_discount all empty.
+
+    Note: 'minimal' formerly meant "skip the fill entirely". It now runs the
+    same UPDATE as 'simple' — the UPDATE safely no-ops when the needed ex_ or
+    channels tables are absent (caught downstream), so qn/digitalcloud get
+    channel_name/us_* filled whenever the source data is actually present."""
     stmts: list[str] = []
 
+    # minimal -> simple (fill runs; safely skipped if ex_/channels missing)
     if mode == "minimal":
-        return stmts
+        mode = "simple"
 
     # index ex_users and ex_channels (and ex_tokens for full mode)
     for tbl in ["ex_users", "ex_channels"] + (["ex_tokens"] if mode == "full" else []):

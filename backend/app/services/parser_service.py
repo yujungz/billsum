@@ -7,6 +7,10 @@ import logging
 import openpyxl
 from openpyxl.styles import Font
 
+# XML-illegal control chars (0x00-0x08, 0x0B, 0x0C, 0x0E-0x1F) that openpyxl/Excel
+# reject — stripped from cell values before writing.
+ILLEGAL_CHARACTERS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
 from app.config import AppConfig
 from app import database as db
 
@@ -553,6 +557,13 @@ _EXCEL_WIDTHS = {
 }
 
 
+def _sanitize_cell(v):
+    """Strip XML-illegal control chars that openpyxl/Excel reject; keep non-str as-is."""
+    if isinstance(v, str):
+        return ILLEGAL_CHARACTERS_RE.sub("", v)
+    return v
+
+
 def build_excel_bytes(table_type: str, headers: list[str], rows: list[tuple]) -> bytes:
     """Generate a proper .xlsx file using openpyxl."""
     wb = openpyxl.Workbook()
@@ -569,7 +580,7 @@ def build_excel_bytes(table_type: str, headers: list[str], rows: list[tuple]) ->
 
     for ri, row in enumerate(rows, 2):
         for ci, val in enumerate(row, 1):
-            ws.cell(row=ri, column=ci, value=val)
+            ws.cell(row=ri, column=ci, value=_sanitize_cell(val))
 
     buf = io.BytesIO()
     wb.save(buf)
