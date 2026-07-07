@@ -21,6 +21,10 @@ async def init_pool(config: AppConfig | None = None):
         autocommit=True,
         maxsize=10,
         minsize=1,
+        # Raise the in-memory temp-table cap so big GROUP BY aggregations
+        # (stats/finance) stay in memory instead of spilling to disk.
+        init_command="SET SESSION tmp_table_size=512*1024*1024, "
+                     "max_heap_table_size=512*1024*1024",
     )
 
 

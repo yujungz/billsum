@@ -289,6 +289,79 @@ def get_stats_detail_download(task_id: str) -> tuple[str, str] | None:
     return path, fn
 
 
+# ── Async stats query task machinery ──
+# Large aggregations can take minutes (full table scan); running them in the
+# background + polling avoids HTTP timeouts / silent "暂无数据".
+
+_STATS_QUERY_TASKS: dict[str, dict] = {}
+_STATS_QUERY_TTL = 3600  # prune task entries older than 1h
+
+
+def _prune_stats_query_tasks():
+    now = time.time()
+    expired = [tid for tid, t in _STATS_QUERY_TASKS.items()
+               if t.get("end_time") and now - t["end_time"] > _STATS_QUERY_TTL]
+    for tid in expired:
+        _STATS_QUERY_TASKS.pop(tid, None)
+
+
+def start_stats_query_task(site: str, table_name: str, group_by: list[str],
+                            filters: dict | None, show_zero: bool,
+                            show_channel_name: bool) -> str:
+    _prune_stats_query_tasks()
+    task_id = uuid.uuid4().hex[:8]
+    _STATS_QUERY_TASKS[task_id] = {
+        "task_id": task_id,
+        "status": "running",
+        "progress": "排队中",
+        "start_time": time.time(),
+        "end_time": None,
+        "result": None,
+        "error": None,
+    }
+
+    async def _run():
+        try:
+            _STATS_QUERY_TASKS[task_id]["progress"] = "聚合查询中..."
+            result = await stats_service.query_stats(
+                site, table_name, group_by, filters, show_zero,
+                show_channel_name=show_channel_name,
+            )
+            _STATS_QUERY_TASKS[task_id]["result"] = result
+            _STATS_QUERY_TASKS[task_id]["status"] = "done"
+        except Exception as e:
+            log.exception("stats query task %s failed", task_id)
+            _STATS_QUERY_TASKS[task_id]["status"] = "failed"
+            _STATS_QUERY_TASKS[task_id]["error"] = str(e)
+        finally:
+            _STATS_QUERY_TASKS[task_id]["end_time"] = time.time()
+
+    import asyncio
+    asyncio.create_task(_run())
+    return task_id
+
+
+def get_stats_query_status(task_id: str) -> dict | None:
+    t = _STATS_QUERY_TASKS.get(task_id)
+    if not t:
+        return None
+    elapsed = (t["end_time"] or time.time()) - t["start_time"]
+    return {
+        "task_id": task_id,
+        "status": t["status"],
+        "progress": t["progress"],
+        "error": t.get("error"),
+        "elapsed": round(elapsed, 1),
+    }
+
+
+def get_stats_query_result(task_id: str) -> list[dict] | None:
+    t = _STATS_QUERY_TASKS.get(task_id)
+    if not t or t["status"] != "done":
+        return None
+    return t.get("result")
+
+
 # ── Pydantic model ──
 
 
@@ -313,6 +386,33 @@ async def query_stats(req: StatsRequest):
         show_channel_name=req.show_channel_name,
     )
     return {"data": result}
+
+
+@router.post("/query-async")
+async def query_stats_async(req: StatsRequest):
+    """Start a background stats aggregation; return task_id immediately.
+    For large datasets where the synchronous /query would time out."""
+    task_id = start_stats_query_task(
+        req.site, req.table_name, req.group_by, req.filters, req.show_zero,
+        req.show_channel_name,
+    )
+    return {"task_id": task_id}
+
+
+@router.get("/query-status")
+async def query_stats_status(task_id: str = Query(...)):
+    s = get_stats_query_status(task_id)
+    if not s:
+        raise HTTPException(404, detail="任务不存在")
+    return s
+
+
+@router.get("/query-result")
+async def query_stats_result(task_id: str = Query(...)):
+    r = get_stats_query_result(task_id)
+    if r is None:
+        raise HTTPException(404, detail="结果尚未就绪或任务不存在")
+    return {"data": r}
 
 
 @router.get("/distinct")

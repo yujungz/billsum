@@ -83,7 +83,7 @@
         </div>
 
         <div ref="tableWrapper" class="table-wrapper">
-          <el-table :data="pagedData" border stripe :height="tableHeight" v-loading="loading" style="width: 100%"
+          <el-table :data="pagedData" border stripe :height="tableHeight" v-loading="loading" :element-loading-text="loadingText" style="width: 100%"
             show-summary :summary-method="getSummary">
             <el-table-column v-for="col in resultColumns" :key="col.key" :prop="col.key" :label="col.label"
               :width="col.width" :formatter="col.formatter" show-overflow-tooltip />
@@ -130,6 +130,7 @@ const sites = ['ai', 'csp', 'pinova', 'wzg', 'qn', 'digitalcloud', 'wshk']
 const logTables = ref([])
 const statsData = ref([])
 const loading = ref(false)
+const loadingText = ref('查询中...')
 const exportLoading = ref(false)
 const page = ref(1)
 const pageSize = ref(parseInt(localStorage.getItem('billsum_page_size')) || 20)
@@ -370,6 +371,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  _cancelPoll = true
   if (resizeObserver) resizeObserver.disconnect()
 })
 
@@ -397,12 +399,18 @@ function onTableChange(table) {
   form.date_end = dates.end
 }
 
+// 大数据量聚合走后台任务 + 轮询，避免同步请求超时导致"暂无数据"
+let _queryGen = 0
+let _cancelPoll = false
+
 async function doQuery() {
   if (!form.table_name) {
     ElMessage.warning('请选择日志表')
     return
   }
+  const gen = ++_queryGen
   loading.value = true
+  loadingText.value = '提交查询...'
   page.value = 1
   try {
     const filters = {}
@@ -415,7 +423,7 @@ async function doQuery() {
     if (form.date_start) filters.date_start = form.date_start
     if (form.date_end) filters.date_end = form.date_end
 
-    const { data } = await api.stats.query({
+    const { data: td } = await api.stats.queryAsync({
       site: form.site,
       table_name: form.table_name,
       group_by: form.group_by,
@@ -423,7 +431,23 @@ async function doQuery() {
       show_zero: form.show_zero,
       show_channel_name: showChannelName.value,
     })
-    const rows = data.data || []
+    const taskId = td.task_id
+    let rows = null
+    while (!_cancelPoll && gen === _queryGen) {
+      await new Promise(r => setTimeout(r, 1500))
+      if (gen !== _queryGen) return  // 被更新的查询取代
+      const { data: st } = await api.stats.queryStatus(taskId)
+      if (st.status === 'done') {
+        const { data: rd } = await api.stats.queryResult(taskId)
+        rows = rd.data || []
+        break
+      } else if (st.status === 'failed') {
+        throw new Error(st.error || '查询失败')
+      }
+      loadingText.value = `查询中... ${st.elapsed || 0}s`
+    }
+    if (gen !== _queryGen) return
+
     if (form.desc_order) {
       const dateKey = form.group_by.includes('day') ? 'period_day' : 'period_month'
       rows.sort((a, b) => {
@@ -434,8 +458,13 @@ async function doQuery() {
     statsData.value = rows
     // 查询成功后保存当前统计粒度选择
     try { localStorage.setItem(STATS_GROUP_KEY, JSON.stringify(form.group_by)) } catch { /* ignore */ }
+  } catch (e) {
+    if (gen !== _queryGen) return
+    statsData.value = []
+    const msg = e.response?.data?.detail || e.message || ''
+    ElMessage.error(msg ? `查询失败：${msg}` : '查询失败：数据量可能过大，请收窄日期范围或减少统计粒度后重试')
   } finally {
-    loading.value = false
+    if (gen === _queryGen) loading.value = false
   }
 }
 

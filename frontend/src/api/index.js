@@ -63,6 +63,9 @@ export default {
   // Stats
   stats: {
     query: (data) => api.post('/stats/query', data),
+    queryAsync: (data) => api.post('/stats/query-async', data),
+    queryStatus: (taskId) => api.get('/stats/query-status', { params: { task_id: taskId } }),
+    queryResult: (taskId) => api.get('/stats/query-result', { params: { task_id: taskId } }),
     distinct: (site, table, field) => api.get('/stats/distinct', { params: { site, table, field } }),
     exportDetail: (data) => api.post('/stats/export-detail', data, { responseType: 'blob' }),
     exportDetailAsync: (data) => api.post('/stats/export-detail-async', data),
