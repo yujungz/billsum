@@ -36,7 +36,7 @@
       <el-checkbox v-model="addNew" :disabled="isDefaultSelected">新增</el-checkbox>
       <el-button type="primary" :loading="saving" @click="saveConfig">保存配置</el-button>
       <el-button :loading="resetting" @click="resetConfig">重置配置</el-button>
-      <el-checkbox v-model="skipImport" :disabled="running" style="margin-left: 8px">导入目的库</el-checkbox>
+      <el-checkbox v-model="doImport" :disabled="running" style="margin-left: 8px">导入目的库</el-checkbox>
       <el-button type="danger" :disabled="running" :loading="starting" @click="startTransfer">开始传导</el-button>
       <el-button v-if="taskDone && hasTgz" type="primary" :icon="Download" plain @click="downloadTgz">下载 {{ downloadName }}</el-button>
     </el-space>
@@ -119,7 +119,7 @@ const taskId = ref(null)
 const hasTgz = ref(false)
 const downloadName = ref('')
 const taskDone = ref(false)
-const skipImport = ref(true)
+const doImport = ref(true)   // 勾选=导入目的库；接口 skip_import 取反
 const logs = ref([])
 const elapsed = ref(0)
 const timerRunning = ref(false)
@@ -297,7 +297,7 @@ async function startTransfer() {
   downloadName.value = ''
   startTimer()
   try {
-    const { data } = await api.conduction.start({ source: config.source, destination: config.destination, skip_import: !skipImport.value })
+    const { data } = await api.conduction.start({ source: config.source, destination: config.destination, skip_import: !doImport.value })
     taskId.value = data.task_id
     starting.value = false
     pollTask(data.task_id)
