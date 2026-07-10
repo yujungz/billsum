@@ -119,7 +119,7 @@ const taskId = ref(null)
 const hasTgz = ref(false)
 const downloadName = ref('')
 const taskDone = ref(false)
-const skipImport = ref(false)
+const skipImport = ref(true)
 const logs = ref([])
 const elapsed = ref(0)
 const timerRunning = ref(false)
@@ -297,7 +297,7 @@ async function startTransfer() {
   downloadName.value = ''
   startTimer()
   try {
-    const { data } = await api.conduction.start({ source: config.source, destination: config.destination, skip_import: skipImport.value })
+    const { data } = await api.conduction.start({ source: config.source, destination: config.destination, skip_import: !skipImport.value })
     taskId.value = data.task_id
     starting.value = false
     pollTask(data.task_id)
