@@ -226,7 +226,7 @@ import api from '../api'
 import PaginationBar from '../components/PaginationBar.vue'
 
 const sites = ['ai', 'csp', 'pinova', 'wzg', 'qn', 'digitalcloud', 'wshk']
-const activeTab = ref('supplier')
+const activeTab = ref('userStats')   // 默认激活「用户统计」
 // 三个子功能查询成功后在标题右侧显示查询耗时
 const financeQueryElapsed = ref(null)
 
