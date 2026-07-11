@@ -1,7 +1,12 @@
 <template>
   <div class="finance-view">
     <el-card>
-      <template #header><span class="card-title">财务报表</span></template>
+      <template #header>
+        <div class="finance-header">
+          <span class="card-title">财务报表</span>
+          <span v-if="financeQueryElapsed != null" class="query-elapsed">查询耗时 {{ financeQueryElapsed }}s</span>
+        </div>
+      </template>
       <el-tabs v-model="activeTab" class="finance-tabs">
         <!-- Tab 1: 供应商对账 -->
         <el-tab-pane label="供应商对账" name="supplier">
@@ -222,6 +227,8 @@ import PaginationBar from '../components/PaginationBar.vue'
 
 const sites = ['ai', 'csp', 'pinova', 'wzg', 'qn', 'digitalcloud', 'wshk']
 const activeTab = ref('supplier')
+// 三个子功能查询成功后在标题右侧显示查询耗时
+const financeQueryElapsed = ref(null)
 
 // ── Shared formatters ──
 
@@ -386,6 +393,7 @@ async function doSupplierQuery() {
   const gen = ++_supplierGen
   supplierLoading.value = true
   supplierLoadingText.value = '提交查询...'
+  financeQueryElapsed.value = null
   try {
     const params = {
       site: supplierForm.site,
@@ -405,6 +413,7 @@ async function doSupplierQuery() {
       if (st.status === 'done') {
         const { data: rd } = await api.finance.supplierQueryResult(taskId)
         rows = rd.rows || []
+        financeQueryElapsed.value = st.elapsed
         break
       } else if (st.status === 'failed') {
         throw new Error(st.error || '查询失败')
@@ -730,6 +739,8 @@ async function doUserStatsQuery() {
   if (!userStatsForm.table) { ElMessage.warning('请选择日志表'); return }
 
   userStatsLoading.value = true
+  financeQueryElapsed.value = null
+  const _t0 = Date.now()
   try {
     const params = {
       site: userStatsForm.site,
@@ -742,6 +753,7 @@ async function doUserStatsQuery() {
     Object.assign(params, settlementParams())
     const { data } = await api.finance.userStats(params)
     saveGranularity()
+    financeQueryElapsed.value = ((Date.now() - _t0) / 1000).toFixed(1)
     userStatsMonthly.value = data.monthly || []
     userStatsDaily.value = data.daily || []
     userStatsDetailTotal.value = 0
@@ -1024,6 +1036,8 @@ async function doSrPreview() {
   if (!srForm.table) { ElMessage.warning('请选择日志表'); return }
 
   srLoading.value = true
+  financeQueryElapsed.value = null
+  const _t0 = Date.now()
   srGenerated.total_files = 0
   srGenerated.files = []
   try {
@@ -1031,6 +1045,7 @@ async function doSrPreview() {
     if (srForm.dateStart) params.date_start = srForm.dateStart
     if (srForm.dateEnd) params.date_end = srForm.dateEnd
     const { data } = await api.finance.siteReportPreview(params)
+    financeQueryElapsed.value = ((Date.now() - _t0) / 1000).toFixed(1)
     srPreview.purchase = data.purchase || []
     srPreview.sales = data.sales || []
   } catch (e) {
@@ -1220,6 +1235,13 @@ function downloadBlob(blob, filename) {
 <style scoped>
 .finance-view { width: 100%; }
 .card-title { font-size: 16px; font-weight: bold; }
+.finance-header { display: inline-flex; align-items: baseline; }
+.query-elapsed {
+  margin-left: 14px;
+  color: #67c23a;
+  font-size: 13px;
+  font-weight: 500;
+}
 .finance-tabs { height: 100%; display: flex; flex-direction: column; }
 .finance-tabs :deep(.el-tabs__content) { flex: 1; min-height: 0; overflow: auto; }
 .finance-tabs :deep(.el-tab-pane) { height: 100%; }
