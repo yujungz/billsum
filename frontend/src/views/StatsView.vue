@@ -1,7 +1,12 @@
 <template>
   <div class="stats-view">
     <el-card>
-      <template #header><span class="card-title">数据统计</span></template>
+      <template #header>
+        <div class="stats-header">
+          <span class="card-title">数据统计</span>
+          <span v-if="queryElapsed != null" class="query-elapsed">查询耗时 {{ queryElapsed }}s</span>
+        </div>
+      </template>
       <div class="stats-layout">
         <el-form :model="form" label-width="100px" inline>
           <el-form-item label="站点">
@@ -131,6 +136,7 @@ const logTables = ref([])
 const statsData = ref([])
 const loading = ref(false)
 const loadingText = ref('查询中...')
+const queryElapsed = ref(null)
 const exportLoading = ref(false)
 const page = ref(1)
 const pageSize = ref(parseInt(localStorage.getItem('billsum_page_size')) || 20)
@@ -412,6 +418,7 @@ async function doQuery() {
   loading.value = true
   loadingText.value = '提交查询...'
   page.value = 1
+  queryElapsed.value = null
   try {
     const filters = {}
     if (form.filters.username) filters.username = form.filters.username
@@ -440,6 +447,7 @@ async function doQuery() {
       if (st.status === 'done') {
         const { data: rd } = await api.stats.queryResult(taskId)
         rows = rd.data || []
+        queryElapsed.value = st.elapsed
         break
       } else if (st.status === 'failed') {
         throw new Error(st.error || '查询失败')
@@ -625,6 +633,13 @@ function downloadBlob(blob, filename) {
 <style scoped>
 .stats-view { width: 100%; }
 .card-title { font-size: 16px; font-weight: bold; }
+.stats-header { display: inline-flex; align-items: baseline; }
+.query-elapsed {
+  margin-left: 14px;
+  color: #67c23a;
+  font-size: 13px;
+  font-weight: 500;
+}
 .stats-layout {
   display: flex;
   flex-direction: column;
