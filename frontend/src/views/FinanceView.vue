@@ -1032,27 +1032,44 @@ async function onSrTableChange(table) {
   if (dd.end) srForm.dateEnd = dd.end
 }
 
+// 站点月报查询/导出均走后台任务 + 轮询，避免大数据量同步超时
+let _srGen = 0
 async function doSrPreview() {
   if (!srForm.table) { ElMessage.warning('请选择日志表'); return }
 
+  const gen = ++_srGen
   srLoading.value = true
   financeQueryElapsed.value = null
-  const _t0 = Date.now()
   srGenerated.total_files = 0
   srGenerated.files = []
   try {
     const params = { site: srForm.site, table: srForm.table }
     if (srForm.dateStart) params.date_start = srForm.dateStart
     if (srForm.dateEnd) params.date_end = srForm.dateEnd
-    const { data } = await api.finance.siteReportPreview(params)
-    financeQueryElapsed.value = ((Date.now() - _t0) / 1000).toFixed(1)
-    srPreview.purchase = data.purchase || []
-    srPreview.sales = data.sales || []
+    const { data: td } = await api.finance.srPreviewAsync(params)
+    const taskId = td.task_id
+    let result = null
+    while (gen === _srGen) {
+      await new Promise(r => setTimeout(r, 1500))
+      if (gen !== _srGen) return
+      const { data: st } = await api.finance.srPreviewStatus(taskId)
+      if (st.status === 'done') {
+        result = (await api.finance.srPreviewResult(taskId)).data
+        financeQueryElapsed.value = st.elapsed
+        break
+      } else if (st.status === 'failed') {
+        throw new Error(st.error || '查询失败')
+      }
+    }
+    if (gen !== _srGen) return
+    srPreview.purchase = (result && result.purchase) || []
+    srPreview.sales = (result && result.sales) || []
   } catch (e) {
+    if (gen !== _srGen) return
     const msg = e.response?.data?.detail || e.message
     ElMessage.error(msg)
   } finally {
-    srLoading.value = false
+    if (gen === _srGen) srLoading.value = false
   }
 }
 
@@ -1111,11 +1128,28 @@ async function doSrGenerate() {
     const body = { site: srForm.site, table: srForm.table }
     if (srForm.dateStart) body.date_start = srForm.dateStart
     if (srForm.dateEnd) body.date_end = srForm.dateEnd
-    const { data } = await api.finance.siteReportZip(body)
-    await extractZipToDir(data, dirHandle)
+    const { data: td } = await api.finance.srExportAsync(body)
+    const taskId = td.task_id
+    let arrayBuffer = null
+    while (true) {
+      await new Promise(r => setTimeout(r, 2000))
+      const { data: st } = await api.finance.srExportStatus(taskId)
+      if (st.status === 'done') {
+        const { data: blob } = await api.finance.srExportDownload(taskId)
+        arrayBuffer = await blob.arrayBuffer()
+        break
+      } else if (st.status === 'failed') {
+        throw new Error(st.error || '导出失败')
+      }
+      exportTimerText.value = `生成报表中... ${st.elapsed || 0}s`
+    }
+    // 轮询期间目录句柄权限可能失效，写文件前重新请求
+    try { await dirHandle.requestPermission({ mode: 'readwrite' }) } catch { /* ignore */ }
+    await extractZipToDir(arrayBuffer, dirHandle)
     await _saveDirHandle(dirHandle)
     ElMessage.success('报表已导出到所选文件夹')
   } catch (e) {
+    if (e instanceof DOMException && e.name === 'AbortError') return
     const msg = e.response?.data?.detail || e.message
     ElMessage.error(typeof msg === 'string' ? msg : '导出失败')
   } finally {

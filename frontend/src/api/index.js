@@ -45,8 +45,14 @@ export default {
     exportStatus: (taskId) => api.get('/finance/user-stats/export-status', { params: { task_id: taskId } }),
     exportDownload: (taskId) => api.get('/finance/user-stats/export-download', { params: { task_id: taskId }, responseType: 'blob' }),
     siteReportPreview: (params) => api.get('/finance/site-report/preview', { params }),
+    srPreviewAsync: (params) => api.get('/finance/site-report/preview-async', { params }),
+    srPreviewStatus: (taskId) => api.get('/finance/site-report/preview-status', { params: { task_id: taskId } }),
+    srPreviewResult: (taskId) => api.get('/finance/site-report/preview-result', { params: { task_id: taskId } }),
     siteReportGenerate: (data) => api.post('/finance/site-report/generate', data),
     siteReportZip: (data) => api.post('/finance/site-report/generate-zip', data, { responseType: 'arraybuffer' }),
+    srExportAsync: (data) => api.post('/finance/site-report/generate-async', data),
+    srExportStatus: (taskId) => api.get('/finance/site-report/generate-status', { params: { task_id: taskId } }),
+    srExportDownload: (taskId) => api.get('/finance/site-report/generate-download', { params: { task_id: taskId }, responseType: 'blob' }),
   },
 
   // Query

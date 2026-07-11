@@ -1,8 +1,10 @@
 """Finance API - supplier reconciliation, user statistics."""
 
 import asyncio
+import os
 import time
 import uuid
+from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Query
@@ -446,3 +448,147 @@ async def site_report_generate_zip(body: dict):
         media_type="application/zip",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
+
+
+# ── Async site-report (preview + export) — large datasets can be slow ──
+
+_SR_PREVIEW_TASKS: dict[str, dict] = {}
+_SR_EXPORT_TASKS: dict[str, dict] = {}
+_SR_TASK_TTL = 3600
+_SR_EXPORT_DIR = Path(os.getenv("DATA_DIR", "/app/data")) / "sr_export"
+
+
+def _prune_sr_tasks(store: dict):
+    now = time.time()
+    for tid in [t for t, v in store.items()
+                if v.get("end_time") and now - v["end_time"] > _SR_TASK_TTL]:
+        store.pop(tid, None)
+
+
+def _status_of(store: dict, task_id: str) -> dict | None:
+    t = store.get(task_id)
+    if not t:
+        return None
+    elapsed = (t["end_time"] or time.time()) - t["start_time"]
+    return {"task_id": task_id, "status": t["status"], "progress": t["progress"],
+            "error": t.get("error"), "elapsed": round(elapsed, 1)}
+
+
+def start_sr_preview_task(site, table, date_start, date_end) -> str:
+    _prune_sr_tasks(_SR_PREVIEW_TASKS)
+    task_id = uuid.uuid4().hex[:8]
+    _SR_PREVIEW_TASKS[task_id] = {
+        "task_id": task_id, "status": "running", "progress": "排队中",
+        "start_time": time.time(), "end_time": None, "result": None, "error": None,
+    }
+
+    async def _run():
+        try:
+            _SR_PREVIEW_TASKS[task_id]["progress"] = "汇总查询中..."
+            res = await finance_service.site_report_preview(site, table, date_start, date_end)
+            _SR_PREVIEW_TASKS[task_id]["result"] = res
+            _SR_PREVIEW_TASKS[task_id]["status"] = "done"
+        except Exception as ex:
+            _SR_PREVIEW_TASKS[task_id]["status"] = "failed"
+            _SR_PREVIEW_TASKS[task_id]["error"] = str(ex)
+        finally:
+            _SR_PREVIEW_TASKS[task_id]["end_time"] = time.time()
+
+    asyncio.create_task(_run())
+    return task_id
+
+
+def get_sr_preview_result(task_id: str) -> dict | None:
+    t = _SR_PREVIEW_TASKS.get(task_id)
+    if not t or t["status"] != "done":
+        return None
+    return t.get("result")
+
+
+def start_sr_export_task(site, table, date_start, date_end) -> str:
+    _prune_sr_tasks(_SR_EXPORT_TASKS)
+    task_id = uuid.uuid4().hex[:8]
+    ym = (date_start or "").replace("-", "")[:6]
+    _SR_EXPORT_TASKS[task_id] = {
+        "task_id": task_id, "status": "running", "progress": "排队中",
+        "start_time": time.time(), "end_time": None,
+        "file_path": None, "filename": f"{site}_report{ym}.zip", "error": None,
+    }
+
+    async def _run():
+        try:
+            _SR_EXPORT_TASKS[task_id]["progress"] = "生成报表中..."
+            zip_bytes = await finance_service.generate_reports_zip(site, table, date_start, date_end)
+            _SR_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+            fp = _SR_EXPORT_DIR / f"{task_id}.zip"
+            fp.write_bytes(zip_bytes)
+            _SR_EXPORT_TASKS[task_id]["file_path"] = str(fp)
+            _SR_EXPORT_TASKS[task_id]["status"] = "done"
+        except Exception as ex:
+            _SR_EXPORT_TASKS[task_id]["status"] = "failed"
+            _SR_EXPORT_TASKS[task_id]["error"] = str(ex)
+        finally:
+            _SR_EXPORT_TASKS[task_id]["end_time"] = time.time()
+
+    asyncio.create_task(_run())
+    return task_id
+
+
+def get_sr_export_download(task_id: str):
+    t = _SR_EXPORT_TASKS.get(task_id)
+    if not t or t["status"] != "done":
+        return None
+    path = t.get("file_path")
+    if not path or not os.path.exists(path):
+        return None
+    return path, t.get("filename", "report.zip")
+
+
+@router.get("/site-report/preview-async")
+async def sr_preview_async(
+    site: str = Query(...), table: str = Query(...),
+    date_start: str = Query(""), date_end: str = Query(""),
+):
+    return {"task_id": start_sr_preview_task(site, table, date_start, date_end)}
+
+
+@router.get("/site-report/preview-status")
+async def sr_preview_status(task_id: str = Query(...)):
+    s = _status_of(_SR_PREVIEW_TASKS, task_id)
+    if not s:
+        raise HTTPException(404, detail="任务不存在")
+    return s
+
+
+@router.get("/site-report/preview-result")
+async def sr_preview_result(task_id: str = Query(...)):
+    r = get_sr_preview_result(task_id)
+    if r is None:
+        raise HTTPException(404, detail="结果尚未就绪或任务不存在")
+    return r
+
+
+@router.post("/site-report/generate-async")
+async def sr_generate_async(body: dict):
+    site, table = body.get("site"), body.get("table")
+    date_start, date_end = body.get("date_start"), body.get("date_end")
+    if not all([site, table, date_start, date_end]):
+        raise HTTPException(400, detail="参数不完整")
+    return {"task_id": start_sr_export_task(site, table, date_start, date_end)}
+
+
+@router.get("/site-report/generate-status")
+async def sr_generate_status(task_id: str = Query(...)):
+    s = _status_of(_SR_EXPORT_TASKS, task_id)
+    if not s:
+        raise HTTPException(404, detail="任务不存在")
+    return s
+
+
+@router.get("/site-report/generate-download")
+async def sr_generate_download(task_id: str = Query(...)):
+    res = get_sr_export_download(task_id)
+    if not res:
+        raise HTTPException(404, detail="文件尚未生成或已被清理")
+    path, fn = res
+    return FileResponse(path, filename=fn, media_type="application/zip")
