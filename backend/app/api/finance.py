@@ -1,5 +1,8 @@
 """Finance API - supplier reconciliation, user statistics."""
 
+import asyncio
+import time
+import uuid
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Query
@@ -41,7 +44,7 @@ async def table_dates(table: str = Query(...)):
 async def supplier_query(
     site: str = Query(...),
     table: str = Query(...),
-    username: str = Query(...),
+    username: str = Query(""),
     date_start: str = Query(""),
     date_end: str = Query(""),
     supplier_name: str = Query(""),
@@ -53,11 +56,96 @@ async def supplier_query(
         raise HTTPException(500, detail=str(e))
 
 
+# ── Async supplier query (large "全部" result sets can be slow) ──
+
+_SUPPLIER_QUERY_TASKS: dict[str, dict] = {}
+_SUPPLIER_QUERY_TTL = 3600
+
+
+def _prune_supplier_tasks():
+    now = time.time()
+    for tid in [t for t, v in _SUPPLIER_QUERY_TASKS.items()
+                if v.get("end_time") and now - v["end_time"] > _SUPPLIER_QUERY_TTL]:
+        _SUPPLIER_QUERY_TASKS.pop(tid, None)
+
+
+def start_supplier_query_task(site, table, username, date_start, date_end, supplier_name) -> str:
+    _prune_supplier_tasks()
+    task_id = uuid.uuid4().hex[:8]
+    _SUPPLIER_QUERY_TASKS[task_id] = {
+        "task_id": task_id, "status": "running", "progress": "排队中",
+        "start_time": time.time(), "end_time": None, "rows": None, "error": None,
+    }
+
+    async def _run():
+        try:
+            _SUPPLIER_QUERY_TASKS[task_id]["progress"] = "聚合查询中..."
+            rows = await finance_service.supplier_query(
+                site, table, username, date_start, date_end, supplier_name)
+            _SUPPLIER_QUERY_TASKS[task_id]["rows"] = rows
+            _SUPPLIER_QUERY_TASKS[task_id]["status"] = "done"
+        except Exception as ex:
+            _SUPPLIER_QUERY_TASKS[task_id]["status"] = "failed"
+            _SUPPLIER_QUERY_TASKS[task_id]["error"] = str(ex)
+        finally:
+            _SUPPLIER_QUERY_TASKS[task_id]["end_time"] = time.time()
+
+    asyncio.create_task(_run())
+    return task_id
+
+
+def get_supplier_query_status(task_id: str) -> dict | None:
+    t = _SUPPLIER_QUERY_TASKS.get(task_id)
+    if not t:
+        return None
+    elapsed = (t["end_time"] or time.time()) - t["start_time"]
+    return {
+        "task_id": task_id, "status": t["status"], "progress": t["progress"],
+        "error": t.get("error"), "elapsed": round(elapsed, 1),
+    }
+
+
+def get_supplier_query_result(task_id: str) -> list[dict] | None:
+    t = _SUPPLIER_QUERY_TASKS.get(task_id)
+    if not t or t["status"] != "done":
+        return None
+    return t.get("rows")
+
+
+@router.get("/supplier/query-async")
+async def supplier_query_async(
+    site: str = Query(...),
+    table: str = Query(...),
+    username: str = Query(""),
+    date_start: str = Query(""),
+    date_end: str = Query(""),
+    supplier_name: str = Query(""),
+):
+    task_id = start_supplier_query_task(site, table, username, date_start, date_end, supplier_name)
+    return {"task_id": task_id}
+
+
+@router.get("/supplier/query-status")
+async def supplier_query_status(task_id: str = Query(...)):
+    s = get_supplier_query_status(task_id)
+    if not s:
+        raise HTTPException(404, detail="任务不存在")
+    return s
+
+
+@router.get("/supplier/query-result")
+async def supplier_query_result(task_id: str = Query(...)):
+    r = get_supplier_query_result(task_id)
+    if r is None:
+        raise HTTPException(404, detail="结果尚未就绪或任务不存在")
+    return {"rows": r}
+
+
 @router.get("/supplier/export")
 async def supplier_export(
     site: str = Query(...),
     table: str = Query(...),
-    username: str = Query(...),
+    username: str = Query(""),
     date_start: str = Query(""),
     date_end: str = Query(""),
     supplier_name: str = Query(""),
@@ -68,7 +156,7 @@ async def supplier_export(
     content = _build_supplier_excel(rows)
     ds = date_start.replace("-", "")
     de = date_end.replace("-", "")
-    filename = f"supplier{ds}_{de}_{username}.xlsx"
+    filename = f"supplier{ds}_{de}_{username or 'all'}.xlsx"
     return Response(
         content=content,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

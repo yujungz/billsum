@@ -19,6 +19,7 @@
               </el-form-item>
               <el-form-item label="用户名">
                 <el-select v-model="supplierForm.username" filterable placeholder="选择用户名" style="width: 180px">
+                  <el-option label="全部" value="" />
                   <el-option v-for="u in usernames" :key="u" :label="u" :value="u" />
                 </el-select>
               </el-form-item>
@@ -40,7 +41,7 @@
 
             <div ref="supplierTableWrapper" class="table-wrapper">
               <el-table :data="supplierData" border stripe :height="supplierTableHeight" v-loading="supplierLoading"
-                style="width: 100%" show-overflow-tooltip>
+                :element-loading-text="supplierLoadingText" style="width: 100%" show-overflow-tooltip>
                 <el-table-column v-for="col in supplierColumns" :key="col.key" :prop="col.key" :label="col.label"
                   :width="col.width" :formatter="col.formatter" />
               </el-table>
@@ -266,6 +267,7 @@ const logTables = ref([])
 const usernames = ref([])
 const supplierData = ref([])
 const supplierLoading = ref(false)
+const supplierLoadingText = ref('查询中...')
 const exportLoading = ref(false)
 
 const supplierForm = reactive({
@@ -277,32 +279,40 @@ const supplierForm = reactive({
   supplierName: '神州数码',
 })
 
-const supplierColumns = [
-  { key: '日期', label: '日期（每天一行）', width: 120 },
-  { key: '模型名称', label: '模型名称', width: 180 },
-  { key: '供应商名称', label: '供应商名称', width: 120 },
-  { key: '定价单位/tokens数', label: '定价单位/tokens数', width: 150, formatter: fmtInt },
-  { key: '定价币种', label: '定价币种', width: 100 },
-  { key: '结算含税价input', label: '结算含税价input', width: 140, formatter: fmt6 },
-  { key: '结算含税价output', label: '结算含税价output', width: 150, formatter: fmt6 },
-  { key: '输入tokens', label: '输入tokens', width: 110, formatter: fmtInt },
-  { key: '输出tokens', label: '输出tokens', width: 110, formatter: fmtInt },
-  { key: '调用次数', label: '调用次数', width: 90, formatter: fmtInt },
-  { key: 'input费用', label: 'input费用', width: 110, formatter: fmt6 },
-  { key: 'output费用', label: 'output费用', width: 110, formatter: fmt6 },
-  { key: '创建缓存5M', label: '创建缓存5M', width: 110, formatter: fmtInt },
-  { key: '创建缓存1H', label: '创建缓存1H', width: 110, formatter: fmtInt },
-  { key: '缓存读取', label: '缓存读取', width: 110, formatter: fmtInt },
-  { key: '创建缓存5M单价', label: '创建缓存5M单价', width: 120, formatter: fmt6 },
-  { key: '创建缓存1H单价', label: '创建缓存1H单价', width: 120, formatter: fmt6 },
-  { key: '缓存读取单价', label: '缓存读取单价', width: 120, formatter: fmt6 },
-  { key: '创建缓存5M费用', label: '创建缓存5M费用', width: 130, formatter: fmt6 },
-  { key: '创建缓存1H费用', label: '创建缓存1H费用', width: 130, formatter: fmt6 },
-  { key: '缓存读取费用', label: '缓存读取费用', width: 120, formatter: fmt6 },
-  { key: 'cache的token', label: 'cache的token', width: 120, formatter: fmtInt },
-  { key: 'cache的金额', label: 'cache的金额', width: 110, formatter: fmt6 },
-  { key: '总费用（USD）', label: '总费用（USD）', width: 130, formatter: fmt6 },
-]
+const supplierColumns = computed(() => {
+  const cols = []
+  // 「全部」用户时，日期列前面加「用户名」列
+  if (supplierForm.username === '') {
+    cols.push({ key: '用户名', label: '用户名', width: 120 })
+  }
+  cols.push(
+    { key: '日期', label: '日期（每天一行）', width: 120 },
+    { key: '模型名称', label: '模型名称', width: 180 },
+    { key: '供应商名称', label: '供应商名称', width: 120 },
+    { key: '定价单位/tokens数', label: '定价单位/tokens数', width: 150, formatter: fmtInt },
+    { key: '定价币种', label: '定价币种', width: 100 },
+    { key: '结算含税价input', label: '结算含税价input', width: 140, formatter: fmt6 },
+    { key: '结算含税价output', label: '结算含税价output', width: 150, formatter: fmt6 },
+    { key: '输入tokens', label: '输入tokens', width: 110, formatter: fmtInt },
+    { key: '输出tokens', label: '输出tokens', width: 110, formatter: fmtInt },
+    { key: '调用次数', label: '调用次数', width: 90, formatter: fmtInt },
+    { key: 'input费用', label: 'input费用', width: 110, formatter: fmt6 },
+    { key: 'output费用', label: 'output费用', width: 110, formatter: fmt6 },
+    { key: '创建缓存5M', label: '创建缓存5M', width: 110, formatter: fmtInt },
+    { key: '创建缓存1H', label: '创建缓存1H', width: 110, formatter: fmtInt },
+    { key: '缓存读取', label: '缓存读取', width: 110, formatter: fmtInt },
+    { key: '创建缓存5M单价', label: '创建缓存5M单价', width: 120, formatter: fmt6 },
+    { key: '创建缓存1H单价', label: '创建缓存1H单价', width: 120, formatter: fmt6 },
+    { key: '缓存读取单价', label: '缓存读取单价', width: 120, formatter: fmt6 },
+    { key: '创建缓存5M费用', label: '创建缓存5M费用', width: 130, formatter: fmt6 },
+    { key: '创建缓存1H费用', label: '创建缓存1H费用', width: 130, formatter: fmt6 },
+    { key: '缓存读取费用', label: '缓存读取费用', width: 120, formatter: fmt6 },
+    { key: 'cache的token', label: 'cache的token', width: 120, formatter: fmtInt },
+    { key: 'cache的金额', label: 'cache的金额', width: 110, formatter: fmt6 },
+    { key: '总费用（USD）', label: '总费用（USD）', width: 130, formatter: fmt6 },
+  )
+  return cols
+})
 
 const supplierTableWrapper = ref(null)
 const supplierTableHeight = ref(400)
@@ -368,11 +378,14 @@ async function onTableChange(table) {
   }
 }
 
+// 供应商对账查询走后台任务 + 轮询，避免「全部」大数据量同步请求超时
+let _supplierGen = 0
 async function doSupplierQuery() {
   if (!supplierForm.table) { ElMessage.warning('请选择日志表'); return }
-  if (!supplierForm.username) { ElMessage.warning('请选择用户名'); return }
 
+  const gen = ++_supplierGen
   supplierLoading.value = true
+  supplierLoadingText.value = '提交查询...'
   try {
     const params = {
       site: supplierForm.site,
@@ -382,13 +395,31 @@ async function doSupplierQuery() {
     }
     if (supplierForm.dateStart) params.date_start = supplierForm.dateStart
     if (supplierForm.dateEnd) params.date_end = supplierForm.dateEnd
-    const { data } = await api.finance.supplier(params)
-    supplierData.value = data.rows || []
+    const { data: td } = await api.finance.supplierQueryAsync(params)
+    const taskId = td.task_id
+    let rows = null
+    while (gen === _supplierGen) {
+      await new Promise(r => setTimeout(r, 1500))
+      if (gen !== _supplierGen) return  // 被更新的查询取代
+      const { data: st } = await api.finance.supplierQueryStatus(taskId)
+      if (st.status === 'done') {
+        const { data: rd } = await api.finance.supplierQueryResult(taskId)
+        rows = rd.rows || []
+        break
+      } else if (st.status === 'failed') {
+        throw new Error(st.error || '查询失败')
+      }
+      supplierLoadingText.value = `查询中... ${st.elapsed || 0}s`
+    }
+    if (gen !== _supplierGen) return
+    supplierData.value = rows
   } catch (e) {
+    if (gen !== _supplierGen) return
+    supplierData.value = []
     const msg = e.response?.data?.detail || e.message || '查询失败'
     ElMessage.error(msg)
   } finally {
-    supplierLoading.value = false
+    if (gen === _supplierGen) supplierLoading.value = false
   }
 }
 
@@ -410,7 +441,7 @@ async function doSupplierExport() {
     })
     const ds = (supplierForm.dateStart || '').replace(/-/g, '')
     const de = (supplierForm.dateEnd || '').replace(/-/g, '')
-    const fileName = `supplier${ds}_${de}_${supplierForm.username}.xlsx`
+    const fileName = `supplier${ds}_${de}_${supplierForm.username || 'all'}.xlsx`
     await exportViaFetch(`/api/finance/supplier/export?${params}`, fileName)
   } catch (e) {
     if (e instanceof DOMException && e.name === 'AbortError') return
