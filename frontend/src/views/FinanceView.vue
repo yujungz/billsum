@@ -181,7 +181,7 @@
                   <el-table-column prop="采购员" label="采购员" width="100" />
                   <el-table-column prop="供应商数" label="供应商数" width="100" />
                   <el-table-column prop="记录数" label="记录数" width="100" :formatter="fmtInt" />
-                  <el-table-column prop="消费额度" label="消费额度" width="120" :formatter="fmt4" />
+                  <el-table-column :prop="srForm.quotaType" :label="srForm.quotaType" width="120" :formatter="fmt4" />
                   <el-table-column prop="收入" label="收入" width="120" :formatter="fmt4" />
                   <el-table-column prop="成本" label="成本" width="120" :formatter="fmt4" />
                   <el-table-column prop="毛利" label="毛利" width="120" :formatter="fmt4" />
@@ -195,7 +195,7 @@
                   <el-table-column prop="销售员" label="销售员" width="100" />
                   <el-table-column prop="用户数" label="用户数" width="100" />
                   <el-table-column prop="记录数" label="记录数" width="100" :formatter="fmtInt" />
-                  <el-table-column prop="消费额度" label="消费额度" width="120" :formatter="fmt4" />
+                  <el-table-column :prop="srForm.quotaType" :label="srForm.quotaType" width="120" :formatter="fmt4" />
                   <el-table-column prop="收入" label="收入" width="120" :formatter="fmt4" />
                   <el-table-column prop="成本" label="成本" width="120" :formatter="fmt4" />
                   <el-table-column prop="毛利" label="毛利" width="120" :formatter="fmt4" />

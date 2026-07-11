@@ -732,11 +732,13 @@ def _qfmt(template: str, quota_type: str, **kw) -> str:
     """Format a site-report SQL template.
 
     quota_type='平台额度' 时，把消费额度的费用表达式替换为平台额度表达式
-    (quota/500000)，使 额度/收入/成本/毛利/提成 全部按平台额度口径计算。
+    (quota/500000)，同时把列别名从 `消费额度` 改为 `平台额度`，
+    使 额度/收入/成本/毛利/提成 全部按平台额度口径计算。
     """
     sql = template.format(**kw)
     if quota_type == "平台额度":
-        return sql.replace(_COST_EXPR, _QUOTA_COST_EXPR)
+        sql = sql.replace(_COST_EXPR, _QUOTA_COST_EXPR)
+        sql = sql.replace("`消费额度`", "`平台额度`")
     return sql
 
 PURCHASE_DETAIL_SQL = f"""
@@ -1063,7 +1065,7 @@ async def generate_all_reports(site: str, table: str, date_start: str, date_end:
                 _write_excel(
                     os.path.join(buyer_dir, f"{supplier}_{ym}.xlsx"),
                     headers, rows,
-                    total_fields=["记录数", "消费额度", "收入", "成本", "毛利", "采购提成"],
+                    total_fields=["记录数", quota_type, "收入", "成本", "毛利", "采购提成"],
                 )
                 generated.append(f"采购提成/{buyer}/{supplier}_{ym}.xlsx")
 
@@ -1072,7 +1074,7 @@ async def generate_all_reports(site: str, table: str, date_start: str, date_end:
             _write_excel(
                 os.path.join(buyer_dir, f"{buyer}_汇总_{ym}.xlsx"),
                 headers, summary_rows,
-                total_fields=["消费额度", "收入", "成本", "毛利", "采购提成"],
+                total_fields=[quota_type, "收入", "成本", "毛利", "采购提成"],
             )
             generated.append(f"采购提成/{buyer}/{buyer}_汇总_{ym}.xlsx")
 
@@ -1108,7 +1110,7 @@ async def generate_all_reports(site: str, table: str, date_start: str, date_end:
                 _write_excel(
                     os.path.join(sp_sales_dir, fname),
                     list(rows[0].keys()), rows,
-                    total_fields=["消费额度", "收入", "成本", "毛利", "提成"],
+                    total_fields=[quota_type, "收入", "成本", "毛利", "提成"],
                 )
                 generated.append(f"销售提成/{sp}/{fname}")
 
@@ -1121,7 +1123,7 @@ async def generate_all_reports(site: str, table: str, date_start: str, date_end:
                 _write_excel(
                     os.path.join(sp_cust_dir, fname),
                     list(cust_rows[0].keys()), cust_rows,
-                    total_fields=["消费额度"],
+                    total_fields=[quota_type],
                 )
                 generated.append(f"客户报表/{sp}/{fname}")
 
@@ -1129,7 +1131,7 @@ async def generate_all_reports(site: str, table: str, date_start: str, date_end:
             _write_excel(
                 os.path.join(sp_sales_dir, f"{sp}_汇总_{ym}.xlsx"),
                 list(summary_rows[0].keys()), summary_rows,
-                total_fields=["消费额度", "收入", "成本", "毛利", "提成"],
+                total_fields=[quota_type, "收入", "成本", "毛利", "提成"],
             )
             generated.append(f"销售提成/{sp}/{sp}_汇总_{ym}.xlsx")
 
@@ -1176,13 +1178,13 @@ async def generate_reports_zip(site: str, table: str, date_start: str, date_end:
                     headers = list(rows[0].keys())
                     zf.writestr(
                         f"{buyer_prefix}/{supplier}_{ym}.xlsx",
-                        _excel_bytes(headers, rows, total_fields=["记录数", "消费额度", "收入", "成本", "毛利", "采购提成"]),
+                        _excel_bytes(headers, rows, total_fields=["记录数", quota_type, "收入", "成本", "毛利", "采购提成"]),
                     )
             if summary_rows:
                 headers = list(summary_rows[0].keys())
                 zf.writestr(
                     f"{buyer_prefix}/{buyer}_汇总_{ym}.xlsx",
-                    _excel_bytes(headers, summary_rows, total_fields=["消费额度", "收入", "成本", "毛利", "采购提成"]),
+                    _excel_bytes(headers, summary_rows, total_fields=[quota_type, "收入", "成本", "毛利", "采购提成"]),
                 )
 
         # ── Sales commission + Customer reports ──
@@ -1210,7 +1212,7 @@ async def generate_reports_zip(site: str, table: str, date_start: str, date_end:
                 if rows:
                     zf.writestr(
                         f"{sp_sales_prefix}/{fname}",
-                        _excel_bytes(list(rows[0].keys()), rows, total_fields=["消费额度", "收入", "成本", "毛利", "提成"]),
+                        _excel_bytes(list(rows[0].keys()), rows, total_fields=[quota_type, "收入", "成本", "毛利", "提成"]),
                     )
                 cust_rows = await db.fetch_all(
                     _qfmt(CUSTOMER_DETAIL_SQL, quota_type, table=table),
@@ -1219,12 +1221,12 @@ async def generate_reports_zip(site: str, table: str, date_start: str, date_end:
                 if cust_rows:
                     zf.writestr(
                         f"{sp_cust_prefix}/{fname}",
-                        _excel_bytes(list(cust_rows[0].keys()), cust_rows, total_fields=["消费额度"]),
+                        _excel_bytes(list(cust_rows[0].keys()), cust_rows, total_fields=[quota_type]),
                     )
             if summary_rows:
                 zf.writestr(
                     f"{sp_sales_prefix}/{sp}_汇总_{ym}.xlsx",
-                    _excel_bytes(list(summary_rows[0].keys()), summary_rows, total_fields=["消费额度", "收入", "成本", "毛利", "提成"]),
+                    _excel_bytes(list(summary_rows[0].keys()), summary_rows, total_fields=[quota_type, "收入", "成本", "毛利", "提成"]),
                 )
 
     return buf.getvalue()
