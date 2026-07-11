@@ -410,8 +410,9 @@ async def site_report_preview(
     table: str = Query(...),
     date_start: str = Query(""),
     date_end: str = Query(""),
+    quota_type: str = Query("平台额度"),
 ):
-    return await finance_service.site_report_preview(site, table, date_start, date_end)
+    return await finance_service.site_report_preview(site, table, date_start, date_end, quota_type)
 
 
 @router.post("/site-report/generate")
@@ -420,13 +421,14 @@ async def site_report_generate(body: dict):
     table = body.get("table")
     date_start = body.get("date_start")
     date_end = body.get("date_end")
+    quota_type = body.get("quota_type", "平台额度")
     output_root = body.get("output_root", "E:/Workspaces/claude/billsum/out")
 
     if not all([site, table, date_start, date_end]):
         raise HTTPException(400, detail="参数不完整")
 
     return await finance_service.generate_all_reports(
-        site, table, date_start, date_end, output_root,
+        site, table, date_start, date_end, output_root, quota_type,
     )
 
 
@@ -436,11 +438,12 @@ async def site_report_generate_zip(body: dict):
     table = body.get("table")
     date_start = body.get("date_start")
     date_end = body.get("date_end")
+    quota_type = body.get("quota_type", "平台额度")
 
     if not all([site, table, date_start, date_end]):
         raise HTTPException(400, detail="参数不完整")
 
-    zip_bytes = await finance_service.generate_reports_zip(site, table, date_start, date_end)
+    zip_bytes = await finance_service.generate_reports_zip(site, table, date_start, date_end, quota_type)
     ym = date_start.replace("-", "")[:6]
     filename = f"{site}_report{ym}.zip"
     return Response(
@@ -474,7 +477,7 @@ def _status_of(store: dict, task_id: str) -> dict | None:
             "error": t.get("error"), "elapsed": round(elapsed, 1)}
 
 
-def start_sr_preview_task(site, table, date_start, date_end) -> str:
+def start_sr_preview_task(site, table, date_start, date_end, quota_type="平台额度") -> str:
     _prune_sr_tasks(_SR_PREVIEW_TASKS)
     task_id = uuid.uuid4().hex[:8]
     _SR_PREVIEW_TASKS[task_id] = {
@@ -485,7 +488,7 @@ def start_sr_preview_task(site, table, date_start, date_end) -> str:
     async def _run():
         try:
             _SR_PREVIEW_TASKS[task_id]["progress"] = "汇总查询中..."
-            res = await finance_service.site_report_preview(site, table, date_start, date_end)
+            res = await finance_service.site_report_preview(site, table, date_start, date_end, quota_type)
             _SR_PREVIEW_TASKS[task_id]["result"] = res
             _SR_PREVIEW_TASKS[task_id]["status"] = "done"
         except Exception as ex:
@@ -505,7 +508,7 @@ def get_sr_preview_result(task_id: str) -> dict | None:
     return t.get("result")
 
 
-def start_sr_export_task(site, table, date_start, date_end) -> str:
+def start_sr_export_task(site, table, date_start, date_end, quota_type="平台额度") -> str:
     _prune_sr_tasks(_SR_EXPORT_TASKS)
     task_id = uuid.uuid4().hex[:8]
     ym = (date_start or "").replace("-", "")[:6]
@@ -518,7 +521,7 @@ def start_sr_export_task(site, table, date_start, date_end) -> str:
     async def _run():
         try:
             _SR_EXPORT_TASKS[task_id]["progress"] = "生成报表中..."
-            zip_bytes = await finance_service.generate_reports_zip(site, table, date_start, date_end)
+            zip_bytes = await finance_service.generate_reports_zip(site, table, date_start, date_end, quota_type)
             _SR_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
             fp = _SR_EXPORT_DIR / f"{task_id}.zip"
             fp.write_bytes(zip_bytes)
@@ -548,8 +551,9 @@ def get_sr_export_download(task_id: str):
 async def sr_preview_async(
     site: str = Query(...), table: str = Query(...),
     date_start: str = Query(""), date_end: str = Query(""),
+    quota_type: str = Query("平台额度"),
 ):
-    return {"task_id": start_sr_preview_task(site, table, date_start, date_end)}
+    return {"task_id": start_sr_preview_task(site, table, date_start, date_end, quota_type)}
 
 
 @router.get("/site-report/preview-status")
@@ -572,9 +576,10 @@ async def sr_preview_result(task_id: str = Query(...)):
 async def sr_generate_async(body: dict):
     site, table = body.get("site"), body.get("table")
     date_start, date_end = body.get("date_start"), body.get("date_end")
+    quota_type = body.get("quota_type", "平台额度")
     if not all([site, table, date_start, date_end]):
         raise HTTPException(400, detail="参数不完整")
-    return {"task_id": start_sr_export_task(site, table, date_start, date_end)}
+    return {"task_id": start_sr_export_task(site, table, date_start, date_end, quota_type)}
 
 
 @router.get("/site-report/generate-status")

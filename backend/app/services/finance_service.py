@@ -724,6 +724,20 @@ _1H = "CASE WHEN l.cache_creation_tokens - l.cache_creation_tokens_5m > 0 THEN l
 _GR = "GREATEST(l.cache_creation_tokens, l.cache_creation_tokens_5m)"
 _COST_EXPR = "l.group_ratio*l.model_ratio*2*(l.prompt_tokens+l.completion_ratio*l.completion_tokens+l.cache_ratio*l.cache_tokens+1.25*l.cache_creation_tokens_5m+2.00*"+_1H+")/1000000"
 _US_D = "COALESCE(l.us_discount,0)"
+# 平台额度口径：quota/500000（= quota*2/1000000）；额度类型=平台额度时用它替换 _COST_EXPR
+_QUOTA_COST_EXPR = "l.quota*2/1000000"
+
+
+def _qfmt(template: str, quota_type: str, **kw) -> str:
+    """Format a site-report SQL template.
+
+    quota_type='平台额度' 时，把消费额度的费用表达式替换为平台额度表达式
+    (quota/500000)，使 额度/收入/成本/毛利/提成 全部按平台额度口径计算。
+    """
+    sql = template.format(**kw)
+    if quota_type == "平台额度":
+        return sql.replace(_COST_EXPR, _QUOTA_COST_EXPR)
+    return sql
 
 PURCHASE_DETAIL_SQL = f"""
 SELECT
@@ -985,7 +999,8 @@ def _excel_bytes(headers: list[str], rows: list[dict],
     return buf.getvalue()
 
 
-async def site_report_preview(site: str, table: str, date_start: str, date_end: str) -> dict:
+async def site_report_preview(site: str, table: str, date_start: str, date_end: str,
+                              quota_type: str = "平台额度") -> dict:
     config = AppConfig.load()
     db_name = config.db_name(site)
     ds = f"{date_start} 00:00:00"
@@ -995,14 +1010,14 @@ async def site_report_preview(site: str, table: str, date_start: str, date_end: 
     purchase, sales = [], []
     try:
         purchase = await db.fetch_all(
-            PURCHASE_OVERVIEW_SQL.format(table=table, purchase_rate=purchase_rate, cn_discount=CN_DISCOUNT_EXPR),
+            _qfmt(PURCHASE_OVERVIEW_SQL, quota_type, table=table, purchase_rate=purchase_rate, cn_discount=CN_DISCOUNT_EXPR),
             (ds, de), db=db_name,
         )
     except Exception:
         pass
     try:
         sales = await db.fetch_all(
-            SALES_OVERVIEW_SQL.format(table=table, sales_rate=sales_rate, cn_discount=CN_DISCOUNT_EXPR),
+            _qfmt(SALES_OVERVIEW_SQL, quota_type, table=table, sales_rate=sales_rate, cn_discount=CN_DISCOUNT_EXPR),
             (ds, de), db=db_name,
         )
     except Exception:
@@ -1011,7 +1026,7 @@ async def site_report_preview(site: str, table: str, date_start: str, date_end: 
 
 
 async def generate_all_reports(site: str, table: str, date_start: str, date_end: str,
-                               output_root: str) -> dict:
+                               output_root: str, quota_type: str = "平台额度") -> dict:
     config = AppConfig.load()
     db_name = config.db_name(site)
     ds = f"{date_start} 00:00:00"
@@ -1029,7 +1044,7 @@ async def generate_all_reports(site: str, table: str, date_start: str, date_end:
     for buyer in buyers:
         suppliers = await _get_suppliers(db_name, table, buyer, ds, de)
         summary_rows = await db.fetch_all(
-            PURCHASE_SUMMARY_SQL.format(table=table, purchase_rate=purchase_rate, cn_discount=CN_DISCOUNT_EXPR),
+            _qfmt(PURCHASE_SUMMARY_SQL, quota_type, table=table, purchase_rate=purchase_rate, cn_discount=CN_DISCOUNT_EXPR),
             (buyer, ds, de), db=db_name,
         )
         if not suppliers and not summary_rows:
@@ -1040,7 +1055,7 @@ async def generate_all_reports(site: str, table: str, date_start: str, date_end:
 
         for supplier in suppliers:
             rows = await db.fetch_all(
-                PURCHASE_DETAIL_SQL.format(table=table, purchase_rate=purchase_rate, cn_discount=CN_DISCOUNT_EXPR),
+                _qfmt(PURCHASE_DETAIL_SQL, quota_type, table=table, purchase_rate=purchase_rate, cn_discount=CN_DISCOUNT_EXPR),
                 (buyer, supplier, ds, de), db=db_name,
             )
             if rows:
@@ -1069,7 +1084,7 @@ async def generate_all_reports(site: str, table: str, date_start: str, date_end:
     for sp in salespeople:
         users = await _get_users_for_sp(db_name, table, sp, ds, de)
         summary_rows = await db.fetch_all(
-            SALES_SUMMARY_SQL.format(table=table, sales_rate=sales_rate, cn_discount=CN_DISCOUNT_EXPR),
+            _qfmt(SALES_SUMMARY_SQL, quota_type, table=table, sales_rate=sales_rate, cn_discount=CN_DISCOUNT_EXPR),
             (sp, ds, de), db=db_name,
         )
         if not users and not summary_rows:
@@ -1086,7 +1101,7 @@ async def generate_all_reports(site: str, table: str, date_start: str, date_end:
 
             # Sales detail
             rows = await db.fetch_all(
-                SALES_DETAIL_SQL.format(table=table, sales_rate=sales_rate, cn_discount=CN_DISCOUNT_EXPR),
+                _qfmt(SALES_DETAIL_SQL, quota_type, table=table, sales_rate=sales_rate, cn_discount=CN_DISCOUNT_EXPR),
                 (sp, uname, ds, de), db=db_name,
             )
             if rows:
@@ -1099,7 +1114,7 @@ async def generate_all_reports(site: str, table: str, date_start: str, date_end:
 
             # Customer report
             cust_rows = await db.fetch_all(
-                CUSTOMER_DETAIL_SQL.format(table=table),
+                _qfmt(CUSTOMER_DETAIL_SQL, quota_type, table=table),
                 (sp, uname, ds, de), db=db_name,
             )
             if cust_rows:
@@ -1121,7 +1136,8 @@ async def generate_all_reports(site: str, table: str, date_start: str, date_end:
     return {"report_dir": report_dir, "files": generated, "total_files": len(generated)}
 
 
-async def generate_reports_zip(site: str, table: str, date_start: str, date_end: str) -> bytes:
+async def generate_reports_zip(site: str, table: str, date_start: str, date_end: str,
+                               quota_type: str = "平台额度") -> bytes:
     """Generate all reports and return as a ZIP file."""
     import zipfile
     from io import BytesIO
@@ -1145,7 +1161,7 @@ async def generate_reports_zip(site: str, table: str, date_start: str, date_end:
         for buyer in buyers:
             suppliers = await _get_suppliers(db_name, table, buyer, ds, de)
             summary_rows = await db.fetch_all(
-                PURCHASE_SUMMARY_SQL.format(table=table, purchase_rate=purchase_rate, cn_discount=CN_DISCOUNT_EXPR),
+                _qfmt(PURCHASE_SUMMARY_SQL, quota_type, table=table, purchase_rate=purchase_rate, cn_discount=CN_DISCOUNT_EXPR),
                 (buyer, ds, de), db=db_name,
             )
             if not suppliers and not summary_rows:
@@ -1153,7 +1169,7 @@ async def generate_reports_zip(site: str, table: str, date_start: str, date_end:
             buyer_prefix = f"{report_prefix}/采购提成/{buyer}"
             for supplier in suppliers:
                 rows = await db.fetch_all(
-                    PURCHASE_DETAIL_SQL.format(table=table, purchase_rate=purchase_rate, cn_discount=CN_DISCOUNT_EXPR),
+                    _qfmt(PURCHASE_DETAIL_SQL, quota_type, table=table, purchase_rate=purchase_rate, cn_discount=CN_DISCOUNT_EXPR),
                     (buyer, supplier, ds, de), db=db_name,
                 )
                 if rows:
@@ -1177,7 +1193,7 @@ async def generate_reports_zip(site: str, table: str, date_start: str, date_end:
         for sp in salespeople:
             users = await _get_users_for_sp(db_name, table, sp, ds, de)
             summary_rows = await db.fetch_all(
-                SALES_SUMMARY_SQL.format(table=table, sales_rate=sales_rate, cn_discount=CN_DISCOUNT_EXPR),
+                _qfmt(SALES_SUMMARY_SQL, quota_type, table=table, sales_rate=sales_rate, cn_discount=CN_DISCOUNT_EXPR),
                 (sp, ds, de), db=db_name,
             )
             if not users and not summary_rows:
@@ -1188,7 +1204,7 @@ async def generate_reports_zip(site: str, table: str, date_start: str, date_end:
                 uid, uname = u["user_id"], u["username"]
                 fname = f"{uid}_{uname}_{ym}.xlsx"
                 rows = await db.fetch_all(
-                    SALES_DETAIL_SQL.format(table=table, sales_rate=sales_rate, cn_discount=CN_DISCOUNT_EXPR),
+                    _qfmt(SALES_DETAIL_SQL, quota_type, table=table, sales_rate=sales_rate, cn_discount=CN_DISCOUNT_EXPR),
                     (sp, uname, ds, de), db=db_name,
                 )
                 if rows:
@@ -1197,7 +1213,7 @@ async def generate_reports_zip(site: str, table: str, date_start: str, date_end:
                         _excel_bytes(list(rows[0].keys()), rows, total_fields=["消费额度", "收入", "成本", "毛利", "提成"]),
                     )
                 cust_rows = await db.fetch_all(
-                    CUSTOMER_DETAIL_SQL.format(table=table),
+                    _qfmt(CUSTOMER_DETAIL_SQL, quota_type, table=table),
                     (sp, uname, ds, de), db=db_name,
                 )
                 if cust_rows:

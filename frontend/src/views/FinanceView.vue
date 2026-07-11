@@ -155,6 +155,12 @@
                   <el-option v-for="t in srLogTables" :key="t" :label="t" :value="t" />
                 </el-select>
               </el-form-item>
+              <el-form-item label="额度类型">
+                <el-select v-model="srForm.quotaType" style="width: 120px">
+                  <el-option label="平台额度" value="平台额度" />
+                  <el-option label="消费额度" value="消费额度" />
+                </el-select>
+              </el-form-item>
               <el-form-item label="起始日期">
                 <el-date-picker v-model="srForm.dateStart" type="date" value-format="YYYY-MM-DD" style="width: 160px" />
               </el-form-item>
@@ -1000,6 +1006,7 @@ const srForm = reactive({
   table: '',
   dateStart: '',
   dateEnd: '',
+  quotaType: '平台额度',
 })
 
 const srPreview = reactive({
@@ -1043,7 +1050,7 @@ async function doSrPreview() {
   srGenerated.total_files = 0
   srGenerated.files = []
   try {
-    const params = { site: srForm.site, table: srForm.table }
+    const params = { site: srForm.site, table: srForm.table, quota_type: srForm.quotaType }
     if (srForm.dateStart) params.date_start = srForm.dateStart
     if (srForm.dateEnd) params.date_end = srForm.dateEnd
     const { data: td } = await api.finance.srPreviewAsync(params)
@@ -1125,7 +1132,7 @@ async function doSrGenerate() {
   srGenerating.value = true
   const t0 = startTimer()
   try {
-    const body = { site: srForm.site, table: srForm.table }
+    const body = { site: srForm.site, table: srForm.table, quota_type: srForm.quotaType }
     if (srForm.dateStart) body.date_start = srForm.dateStart
     if (srForm.dateEnd) body.date_end = srForm.dateEnd
     const { data: td } = await api.finance.srExportAsync(body)
