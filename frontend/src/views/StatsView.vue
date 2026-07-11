@@ -640,7 +640,8 @@ function downloadBlob(blob, filename) {
 .group-all :deep(.el-checkbox__label) { font-weight: 600; }
 .zero-fee-group { border: 1px solid #dcdfe6; border-radius: 4px; padding: 0 10px; }
 .granularity-group {
-  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  display: inline-flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  align-self: flex-start;        /* 不被父级 flex 拉伸，右边框贴最后一项 */
   border: 1px solid #dcdfe6; border-radius: 4px;
   padding: 6px 12px; margin: 6px 0 10px;
 }
