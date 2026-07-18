@@ -1,6 +1,8 @@
 """System API - binlog management and SQL execution."""
 
+import asyncio
 import os
+import re
 import subprocess
 import tempfile
 
@@ -29,6 +31,64 @@ async def purge_binlog(req: PurgeRequest):
     else:
         await db.execute("PURGE BINARY LOGS BEFORE NOW()")
     return {"success": True}
+
+
+# ── undo tablespace management ──
+
+@router.get("/undo")
+async def get_undo_info():
+    rows = await db.fetch_all(
+        "SELECT NAME, STATE, ROUND(FILE_SIZE/1024/1024, 2) AS size_mb "
+        "FROM information_schema.INNODB_TABLESPACES WHERE NAME LIKE '%undo%'"
+    )
+    return {"undo_logs": rows}
+
+
+@router.post("/undo/purge")
+async def purge_undo(body: dict):
+    """清除(收缩) undo 表空间：关闭→轮询大小→激活。
+
+    流程：SET INACTIVE → 每隔 3s 查 size_mb（最多 4 次：初次+3 次重试）；
+    size_mb <= 18 视为已收缩到 ~16M，立即 SET ACTIVE 并返回；
+    仍未达标也恢复 ACTIVE，避免 undo 表空间长期不可用。
+    """
+    name = (body.get("name") or "").strip()
+    # 仅允许含 undo 的合法标识符（innodb_undo_002 / undo_003 等，防注入）
+    if not (re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name) and "undo" in name.lower()):
+        raise HTTPException(400, detail="无效的 undo 表空间名")
+
+    try:
+        await db.execute(f"ALTER UNDO TABLESPACE {name} SET INACTIVE")
+    except Exception as e:
+        raise HTTPException(400, detail=f"关闭失败: {e}")
+
+    size_mb = None
+    shrunk = False
+    for _ in range(4):
+        await asyncio.sleep(3)
+        row = await db.fetch_one(
+            "SELECT ROUND(FILE_SIZE/1024/1024, 2) AS size_mb "
+            "FROM information_schema.INNODB_TABLESPACES WHERE NAME=%s",
+            (name,),
+        )
+        v = row.get("size_mb") if row else None
+        size_mb = float(v) if v is not None else None
+        if size_mb is not None and size_mb <= 18:
+            shrunk = True
+            break
+
+    try:
+        await db.execute(f"ALTER UNDO TABLESPACE {name} SET ACTIVE")
+    except Exception as e:
+        raise HTTPException(400, detail=f"激活失败: {e}")
+
+    return {
+        "success": True,
+        "name": name,
+        "size_mb": size_mb,
+        "shrunk": shrunk,
+        "message": f"已收缩到 {size_mb}M" if shrunk else f"未达目标，当前 {size_mb}M",
+    }
 
 
 @router.post("/execute-sql")

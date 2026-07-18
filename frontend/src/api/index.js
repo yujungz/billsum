@@ -94,6 +94,8 @@ export default {
   system: {
     binlog: () => api.get('/system/binlog'),
     purge: (data) => api.post('/system/binlog/purge', data),
+    undo: () => api.get('/system/undo'),
+    undoPurge: (data) => api.post('/system/undo/purge', data),
     executeSql: (site, formData) => api.post('/system/execute-sql', formData, { params: { site }, headers: { 'Content-Type': 'multipart/form-data' } }),
   },
 }
