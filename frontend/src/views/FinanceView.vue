@@ -1286,6 +1286,11 @@ function downloadBlob(blob, filename) {
 .finance-tabs { height: 100%; display: flex; flex-direction: column; }
 .finance-tabs :deep(.el-tabs__content) { flex: 1; min-height: 0; overflow: auto; }
 .finance-tabs :deep(.el-tab-pane) { height: 100%; }
+/* 三个子功能查询条件间距：缩短水平间距(默认32→12)与行间距(默认22→12) */
+.finance-tabs :deep(.el-form--inline .el-form-item) {
+  margin-right: 12px !important;
+  margin-bottom: 12px !important;
+}
 .tab-layout {
   display: flex;
   flex-direction: column;
